@@ -1,0 +1,52 @@
+body { margin:0; font-family:sans-serif; background:#111; color:#eee; }
+button { margin:4px; }
+.board { width:100%; max-width:512px; margin:auto; display:block; }
+.piece { pointer-events: none; }
+.val   { pointer-events: none; }
+.sq.sel {
+  stroke: var(--accent);
+  stroke-width: 3;
+  filter: drop-shadow(0 0 6px rgba(0,191,166,0.6));
+.hoverVal {
+  font-size: 28px;
+  font-weight: 700;
+  fill: #ffd700;            /* gold */
+  paint-order: stroke;
+  stroke: rgba(0,0,0,0.7);
+  stroke-width: 3px;
+  pointer-events: none;
+.val {
+  font-size: 12px;
+  font-weight: 600;
+  fill: #111;            /* default dark */
+  pointer-events: none;
+.val.whiteVal {          /* more specific = overrides .val */
+  fill: #fff !important;
+.sq { fill: #2f2f2f; }
+.sq.dark { fill: #262626; }
+.sq.sel { stroke: #00bfa6; stroke-width: 3; }
+.hoverVal {
+  font-size: 28px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: rgba(0,0,0,0.7);
+  stroke-width: 3px;
+  pointer-events: none;
+.sq { fill: #2f2f2f; }
+.sq.dark { fill: #262626; }
+.sq.sel { stroke: #00bfa6; stroke-width: 3; }
+.hoverVal {
+  font-size: 28px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: rgba(0,0,0,0.7);
+  stroke-width: 3px;
+  pointer-events: none;
+}
+
+button.primary { background: #00bfa6; color: #111; }
+
+}
+
+
+
