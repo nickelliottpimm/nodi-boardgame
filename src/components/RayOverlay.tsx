@@ -2,7 +2,7 @@
 import { SQUARE } from '../game/types';
 import type { Coord } from '../game/types';
 
-export function RayOverlay({
+export function RayOverlay({ rays }: { rays: Coord[] }) {
   origin, path, selected, opacity = 1
 }: {
   origin: Coord;

@@ -11,3 +11,5 @@ button:disabled { opacity:.5; cursor:not-allowed; }
 .sq.dark { fill:#bfbfbf; }
 .sq.sel { stroke:#3aa35a; stroke-width:3; fill-opacity:0.96; }
 .hoverVal { font-size:22px; font-weight:700; pointer-events:none; }
+declare module '*.css';
+

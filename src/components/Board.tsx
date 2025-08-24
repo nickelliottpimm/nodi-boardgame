@@ -64,7 +64,6 @@ export function BoardView({ values }: { values: number[][] }) {
   } = useGame();
 
   const [hover, setHover] = useState<Coord | null>(null);
-  const [showHelp, setShowHelp] = useState(true);
 
   // Scatter
   const [scatterMode, setScatterMode] = useState(false);
