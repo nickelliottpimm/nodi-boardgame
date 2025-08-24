@@ -45,6 +45,32 @@ button { margin:4px; }
 }
 
 button.primary { background: #00bfa6; color: #111; }
+/* Buttons */
+button {
+  background: #2a2a2a;
+  color: #ddd;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+button:hover { filter: brightness(1.1); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.primary { background: #00bfa6; color: #111; border-color: #00bfa6; }
+
+/* Board squares + hover value (from earlier) */
+.sq { fill: #2f2f2f; }
+.sq.dark { fill: #262626; }
+.sq.sel { stroke: #00bfa6; stroke-width: 3; }
+
+.hoverVal {
+  font-size: 28px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: rgba(0,0,0,0.7);
+  stroke-width: 3px;
+  pointer-events: none;
+}
 
 }
 

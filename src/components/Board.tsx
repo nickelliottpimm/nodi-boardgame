@@ -1,7 +1,7 @@
 // src/components/Board.tsx
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import cn from 'classnames';
-import { SQUARE, coordEq, DIRS, inBounds } from '../game/types';
+import { SQUARE, coordEq, DIRS } from '../game/types';
 import type { Coord } from '../game/types';
 import { useGame } from '../store/gameStore';
 import {
@@ -12,6 +12,8 @@ import {
   getRayForKing,
   ownerOf,
 } from '../game/rules';
+import type { Piece } from '../game/rules';
+import { scatterBases, validateScatter } from '../game/scatter';
 import { PieceView } from './Piece';
 import { RayOverlay } from './RayOverlay';
 
@@ -31,107 +33,93 @@ function dirToAngle(dir: AllDir) {
   }
 }
 
+function nextCW(dir: AllDir): AllDir {
+  const i = DIR_ORDER.indexOf(dir);
+  return DIR_ORDER[(i + 1) % 8];
+}
+
+const isKeyPiece = (p: Piece) => p.counters.length === 1 && p.counters[0].isKey;
+
+type AnimState =
+  | null
+  | { kind: 'move'; from: Coord; to: Coord; owner: 'White' | 'Black' }
+  | { kind: 'scatter'; from: Coord; l1: Coord; l2: Coord; owner: 'White' | 'Black' };
+
+/** Compute full current value at a position (counters ± all rays), unbounded. */
+function fullValueAt(board: ReturnType<typeof useGame>['board'], pos: Coord): number {
+  const p = pieceAt(board, pos);
+  if (!p) return 0;
+  let total = p.counters.length;
+  // scan all kings for rays
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const qpos = { r, c };
+    const q = pieceAt(board, qpos);
+    if (!q || !isKing(q) || !q.arrowDir) continue;
+    const path = getRayForKing(board, qpos).segments;
+    const hits = path.some(s => s.r === pos.r && s.c === pos.c);
+    if (hits) total += ownerOf(q) === ownerOf(p) ? 1 : -1;
+  }
+  return total;
+}
+
 export function BoardView({ values }: { values: number[][] }) {
   const {
-    board,
-    turn,
-    selected,
-    select,
-    actMove,
-    actRotateArrow,
-    actCombine,
-    actScatter,
-    endTurn,
+    board, turn, selected, select,
+    actMove, actRotateArrow, actCombine, actScatter, endTurn,
   } = useGame();
 
   const [hover, setHover] = useState<Coord | null>(null);
-  const [scatterMode, setScatterMode] = useState(false);
   const [showHelp, setShowHelp] = useState(true);
 
-  // legal moves (disabled in scatter mode)
+  // Scatter
+  const [scatterMode, setScatterMode] = useState(false);
+  const [scatterBase, setScatterBase] = useState<Coord | null>(null);
+
+  // Rotation (buffered preview)
+  const [rotateMode, setRotateMode] = useState(false);
+  const [previewDir, setPreviewDir] = useState<AllDir | null>(null);
+
+  // Animation overlay
+  const [anim, setAnim] = useState<AnimState>(null);
+  const [animGo, setAnimGo] = useState(false);
+  const animTimeout = useRef<number | null>(null);
+
+  // Legal moves (disabled while in scatter or rotate buffering)
   const legal = useMemo(() => {
-    if (!selected || scatterMode) {
+    if (!selected || scatterMode || rotateMode) {
       return { moves: [], combines: [], captures: [], scatters: [], rotations: [] as ('CW'|'CCW'|'ANY')[] };
     }
     return legalMovesFor(board, selected);
-  }, [board, selected, scatterMode]);
+  }, [board, selected, scatterMode, rotateMode]);
 
-  // hover numeric value
+  // Hover value = FULL current value (can exceed 3)
   const hoverValue = useMemo(() => {
     if (!hover) return null;
-    const p = pieceAt(board, hover);
-    if (!p) return null;
-    return valueAt(board, hover);
+    return fullValueAt(board, hover);
   }, [board, hover]);
 
-  // orientation via 8 dots (available whenever value ≥ 2)
-  function handleOrient(dir: AllDir) {
-    if (!selected) return;
-    const p = pieceAt(board, selected);
-    if (!p || !isKing(p) || !p.arrowDir) return;
-    if (ownerOf(p) !== turn) return;
-
-    if (p.arrowDir !== dir) {
-      const order = DIR_ORDER as unknown as string[];
-      const cur = p.arrowDir as string;
-      const target = dir as string;
-      let steps = (order.indexOf(target) - order.indexOf(cur) + 8) % 8;
-      for (let i = 0; i < steps; i++) actRotateArrow(selected, 'CW', false);
-    }
-
-    const v = valueAt(board, selected);
-    if (v === 2 && !scatterMode) endTurn(); // V2: orient consumes action; V3+ free
-  }
-
-  // scatter targets (two immediate squares along arrow)
-  const scatterTargets = useMemo(() => {
-    if (!selected || !scatterMode) return null;
-    const p = pieceAt(board, selected);
-    if (!p || !isKing(p) || !p.arrowDir) return null;
-    if (ownerOf(p) !== turn) return null;
-
-    const v = valueAt(board, selected);
-    if (v < 2) return null;
-
-    const [dr, dc] = DIRS[p.arrowDir];
-    const l1 = { r: selected.r + dr, c: selected.c + dc };
-    const l2 = { r: selected.r + 2 * dr, c: selected.c + 2 * dc };
-    if (!inBounds(l1.r, l1.c) || !inBounds(l2.r, l2.c)) return null;
-
-    const q1 = pieceAt(board, l1);
-    const q2 = pieceAt(board, l2);
-
-    const selfOwner = ownerOf(p);
-    // no allies on landing squares
-    if ((q1 && ownerOf(q1) === selfOwner) || (q2 && ownerOf(q2) === selfOwner)) {
-      return { l1, l2, can: false, budgetNeed: Infinity };
-    }
-
-    // capture budget equals current value
-    let need = 0;
-    if (q1 && ownerOf(q1) !== selfOwner) need += valueAt(board, l1);
-    if (q2 && ownerOf(q2) !== selfOwner) need += valueAt(board, l2);
-    const can = need <= v;
-
-    return { l1, l2, can, budgetNeed: need };
-  }, [board, selected, scatterMode, turn]);
-
+  // Click handling
   function onSquareClick(r: number, c: number) {
     const pos = { r, c };
 
+    // In scatter mode: click chooses landing #1 (landing #2 = next along arrow)
     if (scatterMode) {
-      if (scatterTargets && (coordEq(pos, scatterTargets.l1) || coordEq(pos, scatterTargets.l2))) {
-        if (scatterTargets.can) {
-          actScatter(selected!, scatterTargets.l1, scatterTargets.l2);
-          setScatterMode(false);
-          endTurn();
-        }
-        return;
+      if (!selected) return;
+      const p = pieceAt(board, selected);
+      if (!p || !isKing(p) || !p.arrowDir) return;
+      const [dr, dc] = DIRS[p.arrowDir];
+      const candidateBase = { r: r - dr, c: c - dc };
+      const bases = scatterBases(board, selected);
+      if (bases.some(b => b.r === candidateBase.r && b.c === candidateBase.c)) {
+        setScatterBase(candidateBase);
       }
-      setScatterMode(false);
-      return;
+      return; // Confirm Scatter will commit
     }
 
+    // In rotate mode: board squares do nothing until confirm/cancel
+    if (rotateMode) return;
+
+    // Normal selection/action
     if (!selected) {
       const p = pieceAt(board, pos);
       if (p && ownerOf(p) === turn) select(pos);
@@ -141,25 +129,143 @@ export function BoardView({ values }: { values: number[][] }) {
     const foundMove = legal.moves.find(m => coordEq(m, pos));
     const foundCap  = legal.captures.find(m => coordEq(m, pos));
     const foundComb = legal.combines.find(m => coordEq(m, pos));
-    const foundScat = legal.scatters.find(s => coordEq(s.l1, pos) || coordEq(s.l2, pos));
 
-    if (foundMove) { actMove(selected, foundMove); endTurn(); return; }
-    if (foundCap)  { actMove(selected, foundCap, true); endTurn(); return; }
-    if (foundComb) { actCombine(selected, foundComb); endTurn(); return; }
-    if (foundScat) { actScatter(selected, foundScat.l1, foundScat.l2); endTurn(); return; }
+    const movingPiece = pieceAt(board, selected);
+    const owner = movingPiece ? ownerOf(movingPiece) : 'White';
 
+    if (foundMove || foundCap || foundComb) {
+      // animate then commit
+      setAnim({ kind: 'move', from: selected, to: pos, owner });
+      setAnimGo(false);
+      requestAnimationFrame(() => requestAnimationFrame(() => setAnimGo(true)));
+      if (animTimeout.current) window.clearTimeout(animTimeout.current);
+      animTimeout.current = window.setTimeout(() => {
+        if (foundComb) actCombine(selected, pos);
+        else actMove(selected, pos, !!foundCap);
+        setAnim(null);
+        endTurn();
+      }, 180);
+      return;
+    }
+
+    // reselect same-side piece
     const p2 = pieceAt(board, pos);
     if (p2 && ownerOf(p2) === turn) { select(pos); return; }
 
+    // otherwise clear
     select(null as any);
   }
 
+  // 8-dot orientation -> buffered preview of the exact direction clicked
+  function handleOrient(dir: AllDir) {
+    if (!selected) return;
+    const p = pieceAt(board, selected);
+    if (!p || !isKing(p) || !p.arrowDir) return;
+    if (ownerOf(p) !== turn) return;
+
+    setRotateMode(true);
+    setPreviewDir(dir); // visually show this direction, but don't commit yet
+  }
+
+  // Rotate button / 'R' hotkey -> advance preview CW each time
+  function cycleRotationCW() {
+    if (!selected) return;
+    const p = pieceAt(board, selected);
+    if (!p || !isKing(p) || !p.arrowDir) return;
+
+    setRotateMode(true);
+    setPreviewDir(prev => {
+      if (!prev) return nextCW(p.arrowDir as AllDir);
+      return nextCW(prev);
+    });
+  }
+
+  // Confirm/cancel rotation
+  function confirmRotation() {
+    if (!selected) return;
+    const p = pieceAt(board, selected);
+    if (!p || !isKing(p) || !p.arrowDir || !previewDir) { setRotateMode(false); setPreviewDir(null); return; }
+
+    const cur = p.arrowDir as AllDir;
+    // compute steps CW from current to previewDir
+    let steps = (DIR_ORDER.indexOf(previewDir) - DIR_ORDER.indexOf(cur) + 8) % 8;
+    for (let i = 0; i < steps; i++) {
+      actRotateArrow(selected, 'CW', false);
+    }
+    // consume turn only if effective ability value is 2 at confirm time
+    const vEff = valueAt(board, selected);
+    if (vEff === 2) endTurn();
+
+    setRotateMode(false);
+    setPreviewDir(null);
+  }
+
+  function cancelRotation() {
+    setRotateMode(false);
+    setPreviewDir(null);
+  }
+
+  // Scatter info (bases & landing validation)
+  const scatterInfo = useMemo(() => {
+    if (!selected || !scatterMode) return null;
+    const p = pieceAt(board, selected);
+    if (!p || !isKing(p) || !p.arrowDir) return null;
+    if (ownerOf(p) !== turn) return null;
+    const bases = scatterBases(board, selected);
+    if (bases.length === 0) return null;
+    const chosen = scatterBase && bases.some(b => b.r === scatterBase.r && b.c === scatterBase.c)
+      ? scatterBase : bases[0];
+    const val = validateScatter(board, selected, chosen);
+    return { bases, base: chosen, ...val }; // l1, l2, can, reason
+  }, [board, selected, scatterMode, scatterBase, turn]);
+
+  // Hotkeys
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!selected) return;
+      if (e.key === 's' || e.key === 'S') {
+        setScatterMode(true);
+        setScatterBase(selected);
+      }
+      if (e.key === 'r' || e.key === 'R') {
+        cycleRotationCW();
+      }
+      if (e.key === 'Enter') {
+        if (scatterMode && scatterInfo?.can) {
+          const owner = ownerOf(pieceAt(board, selected)!);
+          setAnim({ kind: 'scatter', from: selected, l1: scatterInfo.l1, l2: scatterInfo.l2, owner });
+          setAnimGo(false);
+          requestAnimationFrame(() => requestAnimationFrame(() => setAnimGo(true)));
+          if (animTimeout.current) window.clearTimeout(animTimeout.current);
+          animTimeout.current = window.setTimeout(() => {
+            actScatter(selected, scatterInfo.l1, scatterInfo.l2);
+            setAnim(null);
+            setScatterMode(false);
+            setScatterBase(null);
+            endTurn();
+          }, 200);
+        } else if (rotateMode) {
+          confirmRotation();
+        }
+      }
+      if (e.key === 'Escape') {
+        if (scatterMode) { setScatterMode(false); setScatterBase(null); }
+        if (rotateMode)  { cancelRotation(); }
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected, scatterMode, scatterInfo, rotateMode, previewDir, board]);
+
+  // Cleanup animation timer
+  useEffect(() => () => { if (animTimeout.current) window.clearTimeout(animTimeout.current); }, []);
+
   const selectedPiece = selected ? pieceAt(board, selected) : undefined;
   const selectedIsKing = !!(selectedPiece && isKing(selectedPiece));
-  const selectedValue  = selected ? valueAt(board, selected) : 0;
-  const canOrientNow   = selectedIsKing && selectedValue >= 2;
+  const selectedValueAbility = selected ? valueAt(board, selected) : 0; // ability tier for gating orient
+  const canOrientNow = selectedIsKing && selectedValueAbility >= 2;
 
-  // rays for ALL kings (grey), selected king (white)
+  // Rays (white for selected king, grey otherwise)
   const rayLines = useMemo(() => {
     const lines: { origin: Coord; path: Coord[]; selected: boolean }[] = [];
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
@@ -175,38 +281,53 @@ export function BoardView({ values }: { values: number[][] }) {
     return lines;
   }, [board, selected]);
 
-  // help text
+  // Help text
   const helpLines = useMemo(() => {
-  if (!selectedPiece) return [];
-  const v = selectedValue;
-  const lines: string[] = [
-    v === 0 ? 'Value 0: cannot move, cannot orient.' :
-    v === 1 ? 'Value 1: can move one space; cannot orient.' :
-    v === 2 ? 'Value 2: move one space OR re-orient (uses your move); move two along ray; scatter over next two along ray.' :
-              'Value 3: move one space; free re-orient before moving; slide full length along ray; scatter over next two along ray.',
-  ];
-  if (selectedIsKing) lines.push('King: ray boosts allies / diminishes enemies in line-of-sight.');
-  else lines.push('Single: may combine with adjacent friendly single to form a king.');
+    if (!selectedPiece) return [];
+    const vAbility = selectedValueAbility;
+    const lines: string[] = [
+      vAbility === 0 ? 'Value 0: cannot move, cannot orient.' :
+      vAbility === 1 ? 'Value 1: can move one space; cannot orient.' :
+      vAbility === 2 ? 'Value 2: move one space OR re-orient (uses your move); move two along ray; scatter over next two along ray.' :
+                       'Value 3: move one space; free re-orient before moving; slide full length along ray; scatter from any slide base (next two along ray).',
+    ];
+    if (selectedIsKing) lines.push('King: ray boosts allies / diminishes enemies in line-of-sight.');
+    else lines.push('Single: may combine with adjacent friendly single to form a king.');
+    if (selectedPiece && isKeyPiece(selectedPiece)) {
+      lines.push("This is a key piece. Take your opponent’s key pieces to win the game.");
+    }
+    lines.push('Keys cannot form kings.');
+    lines.push('Hotkeys: S=Scatter, R=Rotate, Enter=Confirm, Esc=Cancel.');
+    return lines;
+  }, [selectedPiece, selectedIsKing, selectedValueAbility]);
 
-  if (pieceAt(board, selected!)?.kind === 'Key') {
-    lines.push('This is a key piece. Take your opponent’s key pieces to win the game.');
+  // Merge all legal destinations (moves + combines + captures)
+  const allDestinations: Coord[] = useMemo(() => {
+    if (!selected || scatterMode || rotateMode) return [];
+    const all = [...legal.moves, ...legal.combines, ...legal.captures];
+    const seen = new Set<string>();
+    return all.filter(p => {
+      const k = `${p.r}-${p.c}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }, [legal, scatterMode, rotateMode, selected]);
+
+  function centerOf(pos: Coord) {
+    return { x: pos.c * SQUARE + SQUARE / 2, y: pos.r * SQUARE + SQUARE / 2 };
   }
-
-  lines.push('Keys cannot form kings.');
-  return lines;
-}, [selectedPiece, selectedIsKing, selectedValue, board, selected]);
 
   return (
     <div
       className="board-shell"
       style={{
         position: 'relative',
-        paddingLeft: 280,           // reserve space so board never shifts
-        display: 'block',
-        minWidth: SQUARE * 8 + 280,
+        paddingLeft: 300, // 260 panel + 40 gap
+        display: 'block'
       }}
     >
-      {/* Instructions panel overlays the reserved left area */}
+      {/* Left info panel */}
       <div
         className="side-help"
         style={{
@@ -224,26 +345,98 @@ export function BoardView({ values }: { values: number[][] }) {
           opacity: showHelp ? 1 : 0,
           pointerEvents: showHelp ? 'auto' : 'none',
           transition: 'opacity 120ms ease',
+          marginRight: 40
         }}
       >
         {selectedPiece ? (
           <>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-              <strong>Selected: {ownerOf(selectedPiece)} {selectedIsKing ? 'King' : 'Single'}</strong>
+              <strong>
+                Selected: {ownerOf(selectedPiece)} {selectedIsKing ? 'King' : 'Single'}
+              </strong>
               <button onClick={() => setShowHelp(false)}>Hide</button>
             </div>
+
+            {/* Show full current value prominently */}
+            <div style={{ marginTop: 8, fontSize: 14 }}>
+              Current value (counters ± rays):{" "}
+              <strong>{fullValueAt(board, selected!)}</strong>
+            </div>
+
             <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.35 }}>
               {helpLines.map((t, i) => <div key={i} style={{ marginBottom: 6 }}>• {t}</div>)}
             </div>
+
+            {/* Rotate controls (buffered + visual preview) */}
+            {selectedIsKing && canOrientNow && (
+              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {!rotateMode ? (
+                  <button onClick={() => {
+                    // enter rotate mode and preview next CW from current
+                    const p = pieceAt(board, selected!)!;
+                    const start = (p && isKing(p) && p.arrowDir) ? nextCW(p.arrowDir as AllDir) : 'N';
+                    setRotateMode(true);
+                    setPreviewDir(start as AllDir);
+                  }}>
+                    Rotate
+                  </button>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <button onClick={cycleRotationCW}>Rotate</button>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={cancelRotation}>Cancel Rotation</button>
+                      <button className="primary" onClick={confirmRotation}>Confirm Rotation</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Scatter controls */}
             {selectedIsKing && (
-              <div style={{ marginTop: 10 }}>
-                <button
-                  onClick={() => setScatterMode(m => !m)}
-                  className={cn({ primary: scatterMode })}
-                  title="Scatter over the next two squares along the arrow"
-                >
-                  {scatterMode ? 'Cancel Scatter' : 'Scatter'}
-                </button>
+              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {!scatterMode ? (
+                  <button
+                    className="primary"
+                    onClick={() => {
+                      if (!selected) return;
+                      setScatterMode(true);
+                      setScatterBase(selected); // default base = current
+                    }}
+                    title="Enter scatter selection mode"
+                  >
+                    Scatter
+                  </button>
+                ) : (
+                  <>
+                    <button onClick={() => { setScatterMode(false); setScatterBase(null); }}>
+                      Cancel Scatter
+                    </button>
+                    <button
+                      disabled={!scatterInfo?.can}
+                      className="primary"
+                      onClick={() => {
+                        if (!selected || !scatterInfo) return;
+                        const owner = ownerOf(pieceAt(board, selected)!);
+                        setAnim({ kind: 'scatter', from: selected, l1: scatterInfo.l1, l2: scatterInfo.l2, owner });
+                        setAnimGo(false);
+                        requestAnimationFrame(() => requestAnimationFrame(() => setAnimGo(true)));
+                        if (animTimeout.current) window.clearTimeout(animTimeout.current);
+                        animTimeout.current = window.setTimeout(() => {
+                          actScatter(selected, scatterInfo.l1, scatterInfo.l2);
+                          setAnim(null);
+                          setScatterMode(false);
+                          setScatterBase(null);
+                          endTurn();
+                        }, 200);
+                      }}
+                    >
+                      Confirm Scatter
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </>
@@ -260,150 +453,225 @@ export function BoardView({ values }: { values: number[][] }) {
         )}
       </div>
 
-      {/* Toggle when hidden (no layout shift) */}
+      {/* Bring-back button when panel hidden */}
       {!showHelp && (
         <div style={{ position:'absolute', left: 8, top: 8, zIndex: 2 }}>
-          <button onClick={() => setShowHelp(true)}>Show Instructions</button>
+          <button onClick={() => setShowHelp(true)}>Info</button>
         </div>
       )}
 
-      {/* Board SVG */}
-      <svg className="board" viewBox={`0 0 ${SQUARE * 8} ${SQUARE * 8}`}>
-        {/* Base squares */}
-        {[...Array(8)].flatMap((_, r) =>
-          [...Array(8)].map((__, c) => {
-            const dark = (r + c) % 2 === 1;
-            const isSel = selected && selected.r === r && selected.c === c;
-            return (
-              <rect
-                key={`${r}-${c}`}
-                x={c * SQUARE} y={r * SQUARE}
-                width={SQUARE} height={SQUARE}
-                className={cn('sq', { dark, sel: !!isSel })}
-                onMouseEnter={() => setHover({ r, c })}
-                onMouseLeave={() => setHover(null)}
-                onClick={() => onSquareClick(r, c)}
+      {/* Board */}
+      <div style={{ position: 'relative', display: 'inline-block' }}>
+        <svg
+          className="board"
+          viewBox={`0 0 ${SQUARE * 8} ${SQUARE * 8}`}
+          style={{ width: 'min(92vmin, 100vw)', height: 'auto' }}
+        >
+          {/* Squares */}
+          {[...Array(8)].flatMap((_, r) =>
+            [...Array(8)].map((__, c) => {
+              const isSel = selected && selected.r === r && selected.c === c;
+              const dark = (r + c) % 2 === 1;
+              return (
+                <rect
+                  key={`${r}-${c}`}
+                  x={c * SQUARE} y={r * SQUARE}
+                  width={SQUARE} height={SQUARE}
+                  className={cn('sq', { dark, sel: !!isSel })}
+                  onMouseEnter={() => setHover({ r, c })}
+                  onMouseLeave={() => setHover(null)}
+                  onClick={() => onSquareClick(r, c)}
+                />
+              );
+            })
+          )}
+
+          {/* Rays */}
+          <g>
+            {rayLines.map((l, i) => (
+              <RayOverlay
+                key={`ray-${i}`}
+                origin={l.origin}
+                path={l.path}
+                selected={l.selected}
+                opacity={l.selected ? 1 : 0.9}
               />
-            );
-          })
-        )}
+            ))}
+          </g>
 
-        {/* Rays as lines for all kings */}
-        <g>
-          {rayLines.map((l, i) => (
-            <RayOverlay
-              key={`ray-${i}`}
-              origin={l.origin}
-              path={l.path}
-              selected={l.selected}
-              opacity={l.selected ? 1 : 0.9}
-            />
-          ))}
-        </g>
-
-        {/* Scatter highlights */}
-        {scatterMode && scatterTargets && (
-          ([scatterTargets.l1, scatterTargets.l2] as Coord[]).map((pos, i) => (
+          {/* Scatter bases (V3+): dashed cyan boxes */}
+          {scatterMode && scatterInfo && scatterInfo.bases.length > 1 && scatterInfo.bases.map((b, i) => (
             <rect
-              key={`scat-${i}`}
-              x={pos.c * SQUARE}
-              y={pos.r * SQUARE}
+              key={`base-${i}`}
+              x={b.c * SQUARE}
+              y={b.r * SQUARE}
               width={SQUARE}
               height={SQUARE}
-              fill={scatterTargets.can ? 'rgba(0,200,0,0.28)' : 'rgba(220,0,0,0.28)'}
-              stroke={scatterTargets.can ? 'rgba(0,200,0,0.9)' : 'rgba(220,0,0,0.9)'}
+              fill="none"
+              stroke={(scatterInfo.base.r === b.r && scatterInfo.base.c === b.c) ? 'rgba(0,200,255,0.9)' : 'rgba(0,200,255,0.5)'}
+              strokeDasharray="6 4"
               strokeWidth={2}
-              onClick={() => onSquareClick(pos.r, pos.c)}
+              onClick={() => setScatterBase(b)}
             />
-          ))
-        )}
+          ))}
 
-        {/* Pieces */}
-        {[...Array(8)].flatMap((_, r) =>
-          [...Array(8)].map((__, c) => {
-            const p = pieceAt(board, { r, c });
-            if (!p) return null;
-            const isSel = selected && selected.r === r && selected.c === c ? 'selected' : undefined;
-            return <PieceView key={`p-${r}-${c}`} pos={{ r, c }} piece={p} highlight={isSel} />;
-          })
-        )}
+          {/* Scatter landing squares (non-blocking for hover) */}
+          {scatterMode && scatterInfo && (
+            <>
+              {[scatterInfo.l1, scatterInfo.l2].map((pos, i) => (
+                <rect
+                  key={`scat-${i}`}
+                  x={pos.c * SQUARE}
+                  y={pos.r * SQUARE}
+                  width={SQUARE}
+                  height={SQUARE}
+                  fill={scatterInfo.can ? 'rgba(0,200,0,0.28)' : 'rgba(220,0,0,0.28)'}
+                  stroke={scatterInfo.can ? 'rgba(0,200,0,0.9)' : 'rgba(220,0,0,0.9)'}
+                  strokeWidth={2}
+                  pointerEvents="none"
+                />
+              ))}
+            </>
+          )}
 
-        {/* Hover value */}
-        {hover && hoverValue !== null && pieceAt(board, hover) && (
-          <text
-            x={hover.c * SQUARE + SQUARE / 2}
-            y={hover.r * SQUARE + SQUARE / 2 + 6}
-            textAnchor="middle"
-            className="hoverVal"
-            fill={ownerOf(pieceAt(board, hover)!) === 'Black' ? '#fff' : '#111'}
-          >
-            {hoverValue}
-          </text>
-        )}
+          {/* Pieces */}
+          {[...Array(8)].flatMap((_, r) =>
+            [...Array(8)].map((__, c) => {
+              const p = pieceAt(board, { r, c });
+              if (!p) return null;
+              const isSel = selected && selected.r === r && selected.c === c ? 'selected' : undefined;
+              return <PieceView key={`p-${r}-${c}`} pos={{ r, c }} piece={p} highlight={isSel} />;
+            })
+          )}
 
-        {/* Orientation dots (value ≥ 2) */}
-        {selected && canOrientNow && (() => {
-          const cx = selected.c * SQUARE + SQUARE / 2;
-          const cy = selected.r * SQUARE + SQUARE / 2;
-          const radius = SQUARE * 0.42;
-          return (
-            <g className="orient-dots">
-              {DIR_ORDER.map((d) => {
-                const ang = dirToAngle(d) * Math.PI / 180;
-                const dx = Math.cos(ang) * radius;
-                const dy = Math.sin(ang) * radius;
-                const x = cx + dx;
-                const y = cy + dy;
-                return (
-                  <circle
-                    key={d}
-                    cx={x}
-                    cy={y}
-                    r={6}
-                    fill="white"
-                    stroke="black"
-                    strokeWidth={1}
-                    style={{ cursor: 'pointer' }}
-                    onClick={(e) => { e.stopPropagation(); handleOrient(d); }}
-                  />
-                );
-              })}
-            </g>
-          );
-        })()}
+          {/* Big center value on hovered piece (FULL value) */}
+          {hover && hoverValue !== null && pieceAt(board, hover) && (
+            <text
+              x={hover.c * SQUARE + SQUARE / 2}
+              y={hover.r * SQUARE + SQUARE / 2 + 6}
+              textAnchor="middle"
+              className="hoverVal"
+              fill={ownerOf(pieceAt(board, hover)!) === 'Black' ? '#fff' : '#111'}
+            >
+              {hoverValue}
+            </text>
+          )}
 
-        {/* GREEN highlights: every legal destination (moves, combines, captures) */}
-{selected && !scatterMode && (() => {
-  // merge and dedupe all destinations
-  const all: Coord[] = [
-    ...legal.moves,       // empty squares you can move to
-    ...legal.combines,    // friendly singles you can combine with
-    ...legal.captures,    // enemy pieces you can capture (incl. keys/kings)
-  ];
-  const seen = new Set<string>();
-  const uniq = all.filter(p => {
-    const k = `${p.r}-${p.c}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
+          {/* Orientation dots (buffered rotate) */}
+          {selected && canOrientNow && !scatterMode && (() => {
+            const cx = selected.c * SQUARE + SQUARE / 2;
+            const cy = selected.r * SQUARE + SQUARE / 2;
+            const radius = SQUARE * 0.42;
+            return (
+              <g className="orient-dots">
+                {DIR_ORDER.map((d) => {
+                  const ang = dirToAngle(d) * Math.PI / 180;
+                  const dx = Math.cos(ang) * radius;
+                  const dy = Math.sin(ang) * radius;
+                  const x = cx + dx;
+                  const y = cy + dy;
+                  return (
+                    <circle
+                      key={d}
+                      cx={x}
+                      cy={y}
+                      r={6}
+                      fill="white"
+                      stroke="black"
+                      strokeWidth={1}
+                      style={{ cursor: 'pointer' }}
+                      onClick={(e) => { e.stopPropagation(); handleOrient(d); }}
+                    />
+                  );
+                })}
+              </g>
+            );
+          })()}
 
-  return uniq.map((m, i) => (
-    <rect
-      key={`dest-${i}`}
-      x={m.c * SQUARE}
-      y={m.r * SQUARE}
-      width={SQUARE}
-      height={SQUARE}
-      fill="rgba(0,200,0,0.25)"
-      stroke="rgba(0,200,0,0.9)"
-      strokeWidth={2}
-      onClick={() => onSquareClick(m.r, m.c)}
-    />
-  ));
-})()}
+          {/* GREEN highlights for moves/combines/captures */}
+          {selected && !scatterMode && !rotateMode && (() => {
+            const seen = new Set<string>();
+            return allDestinations.map((m, i) => {
+              const k = `${m.r}-${m.c}`;
+              if (seen.has(k)) return null;
+              seen.add(k);
+              return (
+                <rect
+                  key={`dest-${i}`}
+                  x={m.c * SQUARE}
+                  y={m.r * SQUARE}
+                  width={SQUARE}
+                  height={SQUARE}
+                  fill="rgba(0,200,0,0.25)"
+                  stroke="rgba(0,200,0,0.9)"
+                  strokeWidth={2}
+                  onClick={() => onSquareClick(m.r, m.c)}
+                />
+              );
+            });
+          })()}
 
-      </svg>
+          {/* ---- SIMPLE ANIMATION OVERLAYS ---- */}
+          {anim && anim.kind === 'move' && (() => {
+            const from = centerOf(anim.from);
+            const to = centerOf(anim.to);
+            return (
+              <g
+                style={{
+                  transform: `translate(${from.x}px, ${from.y}px)`,
+                  transition: 'transform 180ms ease',
+                  ...(animGo ? { transform: `translate(${to.x}px, ${to.y}px)` } : {})
+                }}
+              >
+                <circle r={SQUARE * 0.28} fill={anim.owner === 'Black' ? '#111' : '#eee'} stroke={anim.owner === 'Black' ? '#eee' : '#111'} strokeWidth={2} />
+              </g>
+            );
+          })()}
+
+          {anim && anim.kind === 'scatter' && (() => {
+            const from = centerOf(anim.from);
+            const t1 = centerOf(anim.l1);
+            const t2 = centerOf(anim.l2);
+            return (
+              <>
+                <g
+                  style={{
+                    transform: `translate(${from.x}px, ${from.y}px)`,
+                    transition: 'transform 200ms ease',
+                    ...(animGo ? { transform: `translate(${t1.x}px, ${t1.y}px)` } : {})
+                  }}
+                >
+                  <circle r={SQUARE * 0.24} fill={anim.owner === 'Black' ? '#111' : '#eee'} stroke={anim.owner === 'Black' ? '#eee' : '#111'} strokeWidth={2} />
+                </g>
+                <g
+                  style={{
+                    transform: `translate(${from.x}px, ${from.y}px)`,
+                    transition: 'transform 200ms ease',
+                    ...(animGo ? { transform: `translate(${t2.x}px, ${t2.y}px)` } : {})
+                  }}
+                >
+                  <circle r={SQUARE * 0.24} fill={anim.owner === 'Black' ? '#111' : '#eee'} stroke={anim.owner === 'Black' ? '#eee' : '#111'} strokeWidth={2} />
+                </g>
+              </>
+            );
+          })()}
+
+          {/* ---------- ROTATION PREVIEW OVERLAY (arrow only) ---------- */}
+          {rotateMode && selected && selectedIsKing && previewDir && (() => {
+            const cx = selected.c * SQUARE + SQUARE / 2;
+            const cy = selected.r * SQUARE + SQUARE / 2;
+            const ang = (dirToAngle(previewDir) + 90) % 360;
+            const pc = pieceAt(board, selected)!;
+            const stroke = ownerOf(pc) === 'Black' ? '#eee' : '#111';
+            return (
+              <g transform={`translate(${cx} ${cy}) rotate(${ang})`}>
+                {/* simple chevron / arrowhead */}
+                <path d="M -10,12 L 0,-14 L 10,12" fill="none" stroke={stroke} strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" />
+              </g>
+            );
+          })()}
+        </svg>
+      </div>
     </div>
   );
 }

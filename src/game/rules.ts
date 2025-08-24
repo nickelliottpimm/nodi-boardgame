@@ -26,6 +26,48 @@ export function raySquares(start: Coord, dir: Dir): Coord[] {
   return out;
 }
 
+// Scatter validation: enemies on the two landing squares may be captured
+// only if their TOTAL value is <= the king's current value.
+// Allies on landing squares still make it illegal.
+export function validateScatter(
+  b: Board,
+  from: Coord,
+  base: Coord
+): { l1: Coord; l2: Coord; can: boolean; reason?: string } {
+  const p = pieceAt(b, from);
+  if (!p || !isKing(p) || !p.arrowDir) return { l1: base, l2: base, can: false, reason: 'not-king' };
+
+  const v = valueAt(b, from);
+  if (v < 2) return { l1: base, l2: base, can: false, reason: 'too-low' };
+
+  const [dr, dc] = DIRS[p.arrowDir];
+  const l1 = { r: base.r + dr, c: base.c + dc };
+  const l2 = { r: base.r + 2 * dr, c: base.c + 2 * dc };
+  if (!inBounds(l1.r, l1.c) || !inBounds(l2.r, l2.c)) return { l1, l2, can: false, reason: 'offboard' };
+
+  const q1 = pieceAt(b, l1);
+  const q2 = pieceAt(b, l2);
+
+  const me = ownerOf(p);
+
+  // No allies allowed on landing squares
+  if ((q1 && ownerOf(q1) === me) || (q2 && ownerOf(q2) === me)) {
+    return { l1, l2, can: false, reason: 'ally-block' };
+  }
+
+  // If enemies present, their total value must be <= king value
+  const totalEnemyValue =
+    (q1 && ownerOf(q1) !== me ? valueAt(b, l1) : 0) +
+    (q2 && ownerOf(q2) !== me ? valueAt(b, l2) : 0);
+
+  // If no enemies at all, always allowed (pure split)
+  if (!q1 && !q2) return { l1, l2, can: true };
+
+  const can = totalEnemyValue <= v;
+  return { l1, l2, can, reason: can ? undefined : 'capture-sum-exceeds' };
+}
+
+
 export function visibleSquares(b: Board, start: Coord, dir: Dir): Coord[] {
   const path = raySquares(start, dir);
   const out: Coord[] = [];
@@ -88,37 +130,114 @@ export function rotateArrow(p: Piece, dir: 'CW' | 'CCW' = 'CW') {
 }
 
 // ---------- Legality / Moves ----------
-export function legalMovesFor(b: Board, from: Coord) {
-  const piece = pieceAt(b, from);
-  if (!piece) return { moves: [], captures: [], combines: [], scatters: [], rotations: [] as ('CW'|'CCW'|'ANY')[] };
+export function legalMovesFor(b: Board, from: Coord): {
+  moves: Coord[];
+  combines: Coord[];
+  captures: Coord[];
+  scatters: any[];                 // kept for API shape; not used here
+  rotations: ('CW'|'CCW'|'ANY')[];
+} {
+  const p = pieceAt(b, from);
+  if (!p) return { moves: [], combines: [], captures: [], scatters: [], rotations: [] };
 
-  const owner = ownerOf(piece);
-  const v = valueAt(b, from);
-
-  // 🚫 value-0 pieces cannot act at all
-  if (v === 0) {
-    return { moves: [], captures: [], combines: [], scatters: [], rotations: [] as ('CW'|'CCW'|'ANY')[] };
-  }
+  const me = ownerOf(p);
+  const myVal = valueAt(b, from);
+  if (myVal <= 0) return { moves: [], combines: [], captures: [], scatters: [], rotations: [] };
 
   const moves: Coord[] = [];
-  const captures: Coord[] = [];
   const combines: Coord[] = [];
-  const scatters: { base: Coord, l1: Coord, l2: Coord }[] = [];
+  const captures: Coord[] = [];
 
-  const deltas = Object.values(DIRS);
-  // 1-step move / capture / combine
-  for (const [dr, dc] of deltas) {
-    const to = { r: from.r + dr, c: from.c + dc };
-    if (!inBounds(to.r, to.c)) continue;
-    const tp = pieceAt(b, to);
-    if (!tp) {
-      moves.push(to);
-    } else if (ownerOf(tp) === owner) {
-      if (canCombine(piece, tp)) combines.push(to);
+  // helper: add 1-step destinations (8 directions)
+  const STEP_DIRS = [
+    [-1,  0], [-1,  1], [0, 1], [1, 1],
+    [ 1,  0], [ 1, -1], [0,-1], [-1,-1]
+  ] as const;
+
+  const moverIsSingle = !isKing(p) && p.counters && p.counters.length === 1;
+  const moverIsKey = moverIsSingle && !!p.counters[0].isKey;
+  const moverIsSingleNonKey = moverIsSingle && !moverIsKey;
+
+  // 1) One-step moves in any direction (all pieces with value ≥ 1)
+  for (const [dr, dc] of STEP_DIRS) {
+    const r = from.r + dr, c = from.c + dc;
+    if (!inBounds(r, c)) continue;
+    const q = pieceAt(b, { r, c });
+    if (!q) {
+      // empty = regular move
+      moves.push({ r, c });
     } else {
-      if (canCapture(b, from, to)) captures.push(to);
+      const them = ownerOf(q);
+      if (them === me) {
+        // ally: only allow COMBINE if mover is a single non-key and target is single non-key
+        const qIsSingle = !isKing(q) && q.counters && q.counters.length === 1;
+        const qIsKey = qIsSingle && !!q.counters[0].isKey;
+        const qIsSingleNonKey = qIsSingle && !qIsKey;
+        if (moverIsSingleNonKey && qIsSingleNonKey) {
+          combines.push({ r, c });
+        }
+      } else {
+        // enemy: capture allowed if their (current) value ≤ my value
+        const theirVal = valueAt(b, { r, c });
+        if (theirVal <= myVal) captures.push({ r, c });
+      }
     }
   }
+
+  // 2) King arrow-based movement
+  if (isKing(p) && p.arrowDir) {
+    const [dr, dc] = DIRS[p.arrowDir];
+
+    // V2: exactly two along arrow (square 1 must be empty; land on empty or capture ≤ myVal)
+    if (myVal === 2) {
+      const s1 = { r: from.r + dr, c: from.c + dc };
+      const s2 = { r: from.r + 2*dr, c: from.c + 2*dc };
+      if (inBounds(s1.r, s1.c) && inBounds(s2.r, s2.c)) {
+        const b1 = pieceAt(b, s1);
+        if (!b1) {
+          const b2 = pieceAt(b, s2);
+          if (!b2) {
+            moves.push(s2);
+          } else {
+            const them2 = ownerOf(b2);
+            if (them2 !== me) {
+              const theirVal2 = valueAt(b, s2);
+              if (theirVal2 <= myVal) captures.push(s2);
+            }
+            // ally at s2 blocks, do nothing
+          }
+        }
+      }
+    }
+
+    // V3+: slide any distance along arrow through empties; may capture the first blocker if enemy ≤ myVal
+    if (myVal >= 3) {
+      let r = from.r + dr, c = from.c + dc;
+      while (inBounds(r, c)) {
+        const q = pieceAt(b, { r, c });
+        if (!q) {
+          moves.push({ r, c });          // empty squares along the ray
+          r += dr; c += dc;
+          continue;
+        }
+        // blocker encountered
+        const them = ownerOf(q);
+        if (them !== me) {
+          const theirVal = valueAt(b, { r, c });
+          if (theirVal <= myVal) captures.push({ r, c });  // can capture the first blocker
+        }
+        break; // cannot go past a blocker (ally or enemy)
+      }
+    }
+  }
+
+  return {
+    moves,
+    combines,
+    captures,
+    scatters: [],     // scatter is handled via src/game/scatter.ts + Board.tsx
+    rotations: []     // orientation handled in UI; keep empty
+  };
 
   // King extras
   if (isKing(piece) && piece.arrowDir) {
@@ -135,7 +254,6 @@ export function legalMovesFor(b: Board, from: Coord) {
         }
       }
       // Scatter (two next squares in a straight line)
-      const scat = scatterTargets(b, from, piece);
       scatters.push(...scat);
     }
 
@@ -225,5 +343,25 @@ export function scatterTargets(b: Board, from: Coord, piece: Piece): { base: Coo
 
     results.push({ base, l1: a, l2: b2 });
   }
-  return results;
+// --- Scatter helpers used by Board.tsx ---
+
+/** For UI: which base squares are selectable for scatter?
+ * V2: only the current square. V3+: any empty square you can slide to along the arrow (plus current).
+ */
+
+/** Validate scatter for a king at `from`, using a chosen `base` along its arrow.
+ * Landing squares are base+1 and base+2 along the arrow.
+ * Allies on landing squares block. If enemies present, their TOTAL value must be <= king value.
+ */
+
+
+  // If enemies present, total enemy value must be <= king value
+  const totalEnemyValue =
+    (q1 && ownerOf(q1) !== me ? valueAt(b, l1) : 0) +
+    (q2 && ownerOf(q2) !== me ? valueAt(b, l2) : 0);
+
+  if (!q1 && !q2) return { l1, l2, can: true }; // pure split is always allowed
+
+  const can = totalEnemyValue <= v;
+  return { l1, l2, can, reason: can ? undefined : 'capture-sum-exceeds' };
 }
