@@ -400,7 +400,12 @@ export function BoardView({ values }: { values: number[][] }) {
           {/* Rays */}
           <g>
             {rayLines.map((l, i) => (
-              <RayOverlay key={`ray-${i}`} origin={l.origin} path={l.path} selected={l.selected} opacity={l.selected ? 1 : 0.9} />
+              <RayOverlay
+  key={id}
+  rays={path}
+  selected={selected}
+/>
+
             ))}
           </g>
 

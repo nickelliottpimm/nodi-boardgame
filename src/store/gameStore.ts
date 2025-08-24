@@ -3,7 +3,8 @@ import { create } from 'zustand';
 import type { Coord, Dir } from '../game/types';
 import { DIRS } from '../game/types';
 import type { Board, Piece, Player } from '../game/rules';
-import { initialBoard, pieceAt, isKing } from '../game/rules';
+import { pieceAt, isKing } from "../game/rules";
+import { initialBoard } from "../game/setupBoard";
 
 type Move = {
   board: Board;
