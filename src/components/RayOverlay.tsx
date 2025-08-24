@@ -1,29 +1,39 @@
 // src/components/RayOverlay.tsx
-import { SQUARE } from '../game/types';
-import type { Coord } from '../game/types';
+import React from "react";
+import type { Coord } from "../game/types";
+import { SQUARE } from "../game/types";
 
-export function RayOverlay({ rays }: { rays: Coord[] }) {
-  origin, path, selected, opacity = 1
+export function RayOverlay({
+  rays,
+  selected,
 }: {
-  origin: Coord;
-  path: Coord[];
-  selected?: boolean;
-  opacity?: number;
+  rays: Coord[];
+  selected: boolean;
 }) {
-  if (!path.length) return null;
-  const d = path.map((p, i) => {
-    const x = p.c * SQUARE + SQUARE / 2;
-    const y = p.r * SQUARE + SQUARE / 2;
-    return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
-  }).join(' ');
+  if (!rays || rays.length === 0) return null;
+
   return (
-    <path
-      d={d}
-      stroke={selected ? 'white' : 'rgba(255,255,255,0.35)'}
-      strokeWidth={2}
-      fill="none"
-      opacity={opacity}
-      pointerEvents="none"
-    />
+    <svg
+      style={{
+        position: "absolute",
+        top: 0,
+        left: 0,
+        pointerEvents: "none",
+        width: SQUARE * 8,
+        height: SQUARE * 8,
+      }}
+    >
+      {rays.map((r, i) => (
+        <line
+          key={i}
+          x1={(r.c + 0.5) * SQUARE}
+          y1={(r.r + 0.5) * SQUARE}
+          x2={(r.c + 0.5) * SQUARE}
+          y2={(r.r + 0.5) * SQUARE}
+          stroke={selected ? "white" : "gray"}
+          strokeWidth={2}
+        />
+      ))}
+    </svg>
   );
 }
