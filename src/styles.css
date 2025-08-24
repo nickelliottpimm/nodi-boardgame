@@ -70,6 +70,17 @@ button.primary { background: #00bfa6; color: #111; border-color: #00bfa6; }
   stroke: rgba(0,0,0,0.7);
   stroke-width: 3px;
   pointer-events: none;
+/* src/styles.css */
+:root { --bg:#141414; --pane:#1d1d1d; --grid:#2c2c2c; }
+body { margin:0; background:var(--bg); color:#ddd; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji"; }
+button { background:#2a2a2a; color:#ddd; border:1px solid #3a3a3a; border-radius:6px; padding:6px 10px; cursor:pointer; }
+button.primary { background:#2e6f3a; border-color:#3c8f4a; }
+button:disabled { opacity:.5; cursor:not-allowed; }
+.sq { fill:#f2f2f2; }
+.sq.dark { fill:#b3b3b3; }
+.sq.sel { stroke:#3aa35a; stroke-width:3; fill-opacity:0.96; }
+.hoverVal { font-size:22px; font-weight:700; pointer-events:none; }
+
 }
 
 }

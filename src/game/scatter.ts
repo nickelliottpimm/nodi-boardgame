@@ -1,73 +1,61 @@
 // src/game/scatter.ts
-import type { Coord } from './types';
+import type { Coord, Dir } from './types';
 import { DIRS, inBounds } from './types';
-
+import { pieceAt, isKing, ownerOf, valueAt, getRayForKing, isEmpty } from './rules';
 import type { Board } from './rules';
-import { pieceAt, isKing, ownerOf, valueAt } from './rules';
 
-/** Internal: all empty squares you can slide through along `dir` starting after `from`. */
-function slidePath(b: Board, from: Coord, dir: keyof typeof DIRS): Coord[] {
-  const [dr, dc] = DIRS[dir];
-  const out: Coord[] = [];
-  let r = from.r + dr;
-  let c = from.c + dc;
-  while (inBounds(r, c) && !pieceAt(b, { r, c })) {
-    out.push({ r, c });
-    r += dr;
-    c += dc;
-  }
-  return out;
-}
-
-/** For UI: selectable scatter bases.
- * V2: only the current square.
- * V3+: current square + any empty square you can slide to along the arrow.
+/** For a king at `from`: valid bases to scatter from.
+ *  V2: only current square. V3+: current + any empty square you can slide to along the arrow.
  */
 export function scatterBases(b: Board, from: Coord): Coord[] {
   const p = pieceAt(b, from);
   if (!p || !isKing(p) || !p.arrowDir) return [];
-  const v = valueAt(b, from);
-  if (v === 2) return [from];
-  return [from, ...slidePath(b, from, p.arrowDir)];
+  const v = valueAt(b, from); // ability tier (clamped 0..3+ in your rules)
+  const out: Coord[] = [from];
+  if (v < 3) return out; // V2 only: current square
+
+  const [dr, dc] = DIRS[p.arrowDir];
+  let r = from.r + dr, c = from.c + dc;
+  while (inBounds(r, c) && isEmpty(b, { r, c })) {
+    out.push({ r, c });
+    r += dr; c += dc;
+  }
+  return out;
 }
 
-/** Validate scatter for a king at `from`, given a chosen `base` along its arrow.
- * Landing squares are base+1 and base+2 along the arrow.
- * Allies on landing squares block. If enemies present, their TOTAL value must be <= king value.
- */
+/** Given a base, compute l1/l2 (next two along arrow) and whether scatter is legal. */
 export function validateScatter(
   b: Board,
   from: Coord,
   base: Coord
 ): { l1: Coord; l2: Coord; can: boolean; reason?: string } {
-  const p = pieceAt(b, from);
-  if (!p || !isKing(p) || !p.arrowDir) return { l1: base, l2: base, can: false, reason: 'not-king' };
+  const me = pieceAt(b, from);
+  if (!me || !isKing(me) || !me.arrowDir) return { l1: base, l2: base, can: false, reason: 'Not a king' };
 
-  const v = valueAt(b, from);
-  if (v < 2) return { l1: base, l2: base, can: false, reason: 'too-low' };
-
-  const [dr, dc] = DIRS[p.arrowDir];
-  const l1: Coord = { r: base.r + dr, c: base.c + dc };
-  const l2: Coord = { r: base.r + 2 * dr, c: base.c + 2 * dc };
+  const [dr, dc] = DIRS[me.arrowDir];
+  const l1 = { r: base.r + dr, c: base.c + dc };
+  const l2 = { r: base.r + 2*dr, c: base.c + 2*dc };
 
   if (!inBounds(l1.r, l1.c) || !inBounds(l2.r, l2.c)) {
-    return { l1, l2, can: false, reason: 'offboard' };
+    return { l1, l2, can: false, reason: 'Off board' };
   }
 
   const q1 = pieceAt(b, l1);
   const q2 = pieceAt(b, l2);
-  const me = ownerOf(p);
 
-  if ((q1 && ownerOf(q1) === me) || (q2 && ownerOf(q2) === me)) {
-    return { l1, l2, can: false, reason: 'ally-block' };
-  }
+  // Friendly occupancy blocks (cannot land on own pieces)
+  if (q1 && ownerOf(q1) === ownerOf(me)) return { l1, l2, can: false, reason: 'Ally on l1' };
+  if (q2 && ownerOf(q2) === ownerOf(me)) return { l1, l2, can: false, reason: 'Ally on l2' };
 
-  const totalEnemyValue =
-    (q1 && ownerOf(q1) !== me ? valueAt(b, l1) : 0) +
-    (q2 && ownerOf(q2) !== me ? valueAt(b, l2) : 0);
+  // Blocked path from `from` to `base`: must be reachable by sliding (scatterBases enforces this for V3+)
+  // For V2, base === from, so fine.
 
-  if (!q1 && !q2) return { l1, l2, can: true }; // pure split
+  // Capture budget: sum of enemy values on l1+l2 must be <= king’s current value (your correction)
+  const myVal = valueAt(b, from); // attacker current value (ability tier; if you want full counters±rays use that instead)
+  let enemySum = 0;
+  if (q1 && ownerOf(q1) !== ownerOf(me)) enemySum += valueAt(b, l1);
+  if (q2 && ownerOf(q2) !== ownerOf(me)) enemySum += valueAt(b, l2);
+  if (enemySum > myVal) return { l1, l2, can: false, reason: 'Over budget' };
 
-  const can = totalEnemyValue <= v;
-  return { l1, l2, can, reason: can ? undefined : 'capture-sum-exceeds' };
+  return { l1, l2, can: true };
 }

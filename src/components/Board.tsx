@@ -1,5 +1,5 @@
 // src/components/Board.tsx
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import type { Board } from '../game/rules';
 import cn from 'classnames';
 import { SQUARE, coordEq, DIRS } from '../game/types';
 import type { Coord } from '../game/types';
@@ -46,7 +46,8 @@ type AnimState =
   | { kind: 'scatter'; from: Coord; l1: Coord; l2: Coord; owner: 'White' | 'Black' };
 
 /** Compute full current value at a position (counters ± all rays), unbounded. */
-function fullValueAt(board: ReturnType<typeof useGame>['board'], pos: Coord): number {
+function fullValueAt(board: Board, pos: Coord): number { 
+{
   const p = pieceAt(board, pos);
   if (!p) return 0;
   let total = p.counters.length;

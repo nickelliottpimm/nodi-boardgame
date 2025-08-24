@@ -1,5 +1,4 @@
 // src/components/RayOverlay.tsx
-import React from 'react';
 import { SQUARE } from '../game/types';
 import type { Coord } from '../game/types';
 

@@ -5,6 +5,8 @@ import { initialBoard } from '../game/setupBoard';
 
 import type { Coord } from '../game/types';
 
+selected: null as Coord | null,
+
 // Map a (dr, dc) step into one of the 8 directions
 function deltaToDir(dr: number, dc: number): 'N'|'NE'|'E'|'SE'|'S'|'SW'|'W'|'NW' {
   if (dr < 0 && dc === 0) return 'N';
@@ -111,6 +113,7 @@ actCombine: (from, to)=> {
   const { board } = get();
   const histPush = { board: cloneBoard(board), turn: get().turn };
 
+const counter = { owner, isKey: false }; 
   const mover = board[from.r]?.[from.c]?.piece;
   const dest  = board[to.r]?.[to.c]?.piece;
   if (!mover || !dest) return;

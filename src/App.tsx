@@ -1,5 +1,4 @@
 // src/App.tsx
-import React, { useMemo, useState } from "react";
 import { BoardView } from "./components/Board";
 import { useGame } from "./store/gameStore";
 import { computeValues } from "./game/rules";
