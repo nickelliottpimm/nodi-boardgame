@@ -2,6 +2,7 @@
 import type { Coord } from "../game/types";
 import { SQUARE } from "../game/types";
 
+/** Draws a continuous line through ray squares. */
 export function RayOverlay({
   rays,
   selected,
@@ -10,6 +11,11 @@ export function RayOverlay({
   selected: boolean;
 }) {
   if (!rays || rays.length === 0) return null;
+
+  // Build a single polyline from the centers of each ray square
+  const points = rays
+    .map(p => `${(p.c + 0.5) * SQUARE},${(p.r + 0.5) * SQUARE}`)
+    .join(" ");
 
   return (
     <svg
@@ -22,17 +28,12 @@ export function RayOverlay({
         height: SQUARE * 8,
       }}
     >
-      {rays.map((r, i) => (
-        <line
-          key={i}
-          x1={(r.c + 0.5) * SQUARE}
-          y1={(r.r + 0.5) * SQUARE}
-          x2={(r.c + 0.5) * SQUARE}
-          y2={(r.r + 0.5) * SQUARE}
-          stroke={selected ? "white" : "gray"}
-          strokeWidth={2}
-        />
-      ))}
+      <polyline
+        points={points}
+        fill="none"
+        stroke={selected ? "white" : "rgba(255,255,255,0.35)"}
+        strokeWidth={2}
+      />
     </svg>
   );
 }

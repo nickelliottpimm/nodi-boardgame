@@ -6,7 +6,8 @@ import { computeValues } from "./game/rules";
 
 export default function App() {
   const { board, undo, reset, canUndo } = useGame();
-  const values = useMemo(() => computeValues(board), [board]);
+  // Values overlay not passed into BoardView anymore (kept here if you want later)
+  const _values = useMemo(() => computeValues(board), [board]);
   const [showRules, setShowRules] = useState(false);
 
   return (
@@ -25,7 +26,7 @@ export default function App() {
       </p>
 
       <div style={{ padding: 12 }}>
-        <BoardView values={values} />
+        <BoardView />
       </div>
 
       {showRules && (
