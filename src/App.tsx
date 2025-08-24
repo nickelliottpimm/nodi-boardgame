@@ -1,13 +1,10 @@
 // src/App.tsx
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { BoardView } from "./components/Board";
 import { useGame } from "./store/gameStore";
-import { computeValues } from "./game/rules";
 
 export default function App() {
-  const { board, undo, reset, canUndo } = useGame();
-  // Values overlay not passed into BoardView anymore (kept here if you want later)
-  const _values = useMemo(() => computeValues(board), [board]);
+  const { undo, reset, canUndo } = useGame();
   const [showRules, setShowRules] = useState(false);
 
   return (
