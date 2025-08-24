@@ -1,8 +1,9 @@
 // src/components/Board.tsx
-import type { Board } from '../game/rules';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import cn from 'classnames';
 import { SQUARE, coordEq, DIRS } from '../game/types';
 import type { Coord } from '../game/types';
+import type { Board } from '../game/rules';
 import { useGame } from '../store/gameStore';
 import {
   isKing,
@@ -11,6 +12,7 @@ import {
   legalMovesFor,
   getRayForKing,
   ownerOf,
+  isEmpty
 } from '../game/rules';
 import type { Piece } from '../game/rules';
 import { scatterBases, validateScatter } from '../game/scatter';
@@ -45,20 +47,21 @@ type AnimState =
   | { kind: 'move'; from: Coord; to: Coord; owner: 'White' | 'Black' }
   | { kind: 'scatter'; from: Coord; l1: Coord; l2: Coord; owner: 'White' | 'Black' };
 
-/** Compute full current value at a position (counters ± all rays), unbounded. */
-function fullValueAt(board: Board, pos: Coord): number { 
-{
+/** FULL current value (counters ± all rays), for hover display. */
+function fullValueAt(board: Board, pos: Coord): number {
   const p = pieceAt(board, pos);
   if (!p) return 0;
   let total = p.counters.length;
   // scan all kings for rays
-  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
-    const qpos = { r, c };
-    const q = pieceAt(board, qpos);
-    if (!q || !isKing(q) || !q.arrowDir) continue;
-    const path = getRayForKing(board, qpos).segments;
-    const hits = path.some(s => s.r === pos.r && s.c === pos.c);
-    if (hits) total += ownerOf(q) === ownerOf(p) ? 1 : -1;
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const qpos = { r, c };
+      const q = pieceAt(board, qpos);
+      if (!q || !isKing(q) || !q.arrowDir) continue;
+      const path = getRayForKing(board, qpos).segments;
+      const hits = path.some(s => s.r === pos.r && s.c === pos.c);
+      if (hits) total += ownerOf(q) === ownerOf(p) ? 1 : -1;
+    }
   }
   return total;
 }
@@ -85,7 +88,7 @@ export function BoardView({ values }: { values: number[][] }) {
   const [animGo, setAnimGo] = useState(false);
   const animTimeout = useRef<number | null>(null);
 
-  // Legal moves (disabled while in scatter or rotate buffering)
+  // Legal moves (disable while scatter/rotate buffering)
   const legal = useMemo(() => {
     if (!selected || scatterMode || rotateMode) {
       return { moves: [], combines: [], captures: [], scatters: [], rotations: [] as ('CW'|'CCW'|'ANY')[] };
@@ -157,7 +160,7 @@ export function BoardView({ values }: { values: number[][] }) {
     select(null as any);
   }
 
-  // 8-dot orientation -> buffered preview of the exact direction clicked
+  // Orientation dots -> buffered preview of the exact direction clicked
   function handleOrient(dir: AllDir) {
     if (!selected) return;
     const p = pieceAt(board, selected);
@@ -168,7 +171,7 @@ export function BoardView({ values }: { values: number[][] }) {
     setPreviewDir(dir); // visually show this direction, but don't commit yet
   }
 
-  // Rotate button / 'R' hotkey -> advance preview CW each time
+  // Rotate button / 'R' key -> advance preview CW each time
   function cycleRotationCW() {
     if (!selected) return;
     const p = pieceAt(board, selected);
@@ -185,7 +188,11 @@ export function BoardView({ values }: { values: number[][] }) {
   function confirmRotation() {
     if (!selected) return;
     const p = pieceAt(board, selected);
-    if (!p || !isKing(p) || !p.arrowDir || !previewDir) { setRotateMode(false); setPreviewDir(null); return; }
+    if (!p || !isKing(p) || !p.arrowDir || !previewDir) {
+      setRotateMode(false);
+      setPreviewDir(null);
+      return;
+    }
 
     const cur = p.arrowDir as AllDir;
     // compute steps CW from current to previewDir
@@ -259,7 +266,9 @@ export function BoardView({ values }: { values: number[][] }) {
   }, [selected, scatterMode, scatterInfo, rotateMode, previewDir, board]);
 
   // Cleanup animation timer
-  useEffect(() => () => { if (animTimeout.current) window.clearTimeout(animTimeout.current); }, []);
+  useEffect(() => {
+    return () => { if (animTimeout.current) window.clearTimeout(animTimeout.current); };
+  }, []);
 
   const selectedPiece = selected ? pieceAt(board, selected) : undefined;
   const selectedIsKing = !!(selectedPiece && isKing(selectedPiece));
@@ -269,15 +278,17 @@ export function BoardView({ values }: { values: number[][] }) {
   // Rays (white for selected king, grey otherwise)
   const rayLines = useMemo(() => {
     const lines: { origin: Coord; path: Coord[]; selected: boolean }[] = [];
-    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
-      const pos = { r, c };
-      const p = pieceAt(board, pos);
-      if (!p || !isKing(p) || !p.arrowDir) continue;
-      lines.push({
-        origin: pos,
-        path: getRayForKing(board, pos).segments,
-        selected: !!(selected && selected.r === r && selected.c === c),
-      });
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const pos = { r, c };
+        const p = pieceAt(board, pos);
+        if (!p || !isKing(p) || !p.arrowDir) continue;
+        lines.push({
+          origin: pos,
+          path: getRayForKing(board, pos).segments,
+          selected: !!(selected && selected.r === r && selected.c === c),
+        });
+      }
     }
     return lines;
   }, [board, selected]);
@@ -302,7 +313,7 @@ export function BoardView({ values }: { values: number[][] }) {
     return lines;
   }, [selectedPiece, selectedIsKing, selectedValueAbility]);
 
-  // Merge all legal destinations (moves + combines + captures)
+  // All destination squares (moves + combines + captures)
   const allDestinations: Coord[] = useMemo(() => {
     if (!selected || scatterMode || rotateMode) return [];
     const all = [...legal.moves, ...legal.combines, ...legal.captures];
@@ -361,7 +372,7 @@ export function BoardView({ values }: { values: number[][] }) {
             {/* Show full current value prominently */}
             <div style={{ marginTop: 8, fontSize: 14 }}>
               Current value (counters ± rays):{" "}
-              <strong>{fullValueAt(board, selected!)}</strong>
+              <strong>{selected ? fullValueAt(board, selected) : '-'}</strong>
             </div>
 
             <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.35 }}>
@@ -373,7 +384,6 @@ export function BoardView({ values }: { values: number[][] }) {
               <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {!rotateMode ? (
                   <button onClick={() => {
-                    // enter rotate mode and preview next CW from current
                     const p = pieceAt(board, selected!)!;
                     const start = (p && isKing(p) && p.arrowDir) ? nextCW(p.arrowDir as AllDir) : 'N';
                     setRotateMode(true);
@@ -545,7 +555,7 @@ export function BoardView({ values }: { values: number[][] }) {
             })
           )}
 
-          {/* Big center value on hovered piece (FULL value) */}
+          {/* Hover full value */}
           {hover && hoverValue !== null && pieceAt(board, hover) && (
             <text
               x={hover.c * SQUARE + SQUARE / 2}
@@ -612,7 +622,7 @@ export function BoardView({ values }: { values: number[][] }) {
             });
           })()}
 
-          {/* ---- SIMPLE ANIMATION OVERLAYS ---- */}
+          {/* Move animation */}
           {anim && anim.kind === 'move' && (() => {
             const from = centerOf(anim.from);
             const to = centerOf(anim.to);
@@ -629,6 +639,7 @@ export function BoardView({ values }: { values: number[][] }) {
             );
           })()}
 
+          {/* Scatter animation */}
           {anim && anim.kind === 'scatter' && (() => {
             const from = centerOf(anim.from);
             const t1 = centerOf(anim.l1);
@@ -657,16 +668,16 @@ export function BoardView({ values }: { values: number[][] }) {
             );
           })()}
 
-          {/* ---------- ROTATION PREVIEW OVERLAY (arrow only) ---------- */}
+          {/* Rotation PREVIEW overlay (arrow only) */}
           {rotateMode && selected && selectedIsKing && previewDir && (() => {
             const cx = selected.c * SQUARE + SQUARE / 2;
             const cy = selected.r * SQUARE + SQUARE / 2;
+            // align preview with final orientation (+90° fix you asked for previously)
             const ang = (dirToAngle(previewDir) + 90) % 360;
             const pc = pieceAt(board, selected)!;
             const stroke = ownerOf(pc) === 'Black' ? '#eee' : '#111';
             return (
               <g transform={`translate(${cx} ${cy}) rotate(${ang})`}>
-                {/* simple chevron / arrowhead */}
                 <path d="M -10,12 L 0,-14 L 10,12" fill="none" stroke={stroke} strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" />
               </g>
             );
