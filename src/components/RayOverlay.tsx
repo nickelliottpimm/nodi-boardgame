@@ -3,34 +3,26 @@ import { SQUARE } from '../game/types';
 import type { Coord } from '../game/types';
 
 export function RayOverlay({
-  origin,
-  path,
-  selected = false,
-  opacity = 1
+  origin, path, selected, opacity = 1
 }: {
   origin: Coord;
   path: Coord[];
   selected?: boolean;
   opacity?: number;
 }) {
-  if (!path || path.length === 0) return null;
-
-  const ox = origin.c * SQUARE + SQUARE / 2;
-  const oy = origin.r * SQUARE + SQUARE / 2;
-  const end = path[path.length - 1];
-  const ex = end.c * SQUARE + SQUARE / 2;
-  const ey = end.r * SQUARE + SQUARE / 2;
-
+  if (!path.length) return null;
+  const d = path.map((p, i) => {
+    const x = p.c * SQUARE + SQUARE / 2;
+    const y = p.r * SQUARE + SQUARE / 2;
+    return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
+  }).join(' ');
   return (
-    <line
-      x1={ox}
-      y1={oy}
-      x2={ex}
-      y2={ey}
-      stroke={selected ? '#ffffff' : 'rgba(200,200,200,0.5)'}
-      strokeWidth={selected ? 3 : 2}
+    <path
+      d={d}
+      stroke={selected ? 'white' : 'rgba(255,255,255,0.35)'}
+      strokeWidth={2}
+      fill="none"
       opacity={opacity}
-      strokeLinecap="round"
       pointerEvents="none"
     />
   );

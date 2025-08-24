@@ -1,18 +1,18 @@
 // src/game/scatter.ts
-import type { Coord, Dir } from './types';
+import type { Coord } from './types';
 import { DIRS, inBounds } from './types';
-import { pieceAt, isKing, ownerOf, valueAt, getRayForKing, isEmpty } from './rules';
+import { pieceAt, isKing, ownerOf, valueAt, isEmpty } from './rules';
 import type { Board } from './rules';
 
-/** For a king at `from`: valid bases to scatter from.
- *  V2: only current square. V3+: current + any empty square you can slide to along the arrow.
+/** Valid bases a king can scatter from.
+ *  V2: only current square. V3+: current + any empty square slideable along arrow.
  */
 export function scatterBases(b: Board, from: Coord): Coord[] {
   const p = pieceAt(b, from);
   if (!p || !isKing(p) || !p.arrowDir) return [];
-  const v = valueAt(b, from); // ability tier (clamped 0..3+ in your rules)
+  const v = valueAt(b, from);
   const out: Coord[] = [from];
-  if (v < 3) return out; // V2 only: current square
+  if (v < 3) return out;
 
   const [dr, dc] = DIRS[p.arrowDir];
   let r = from.r + dr, c = from.c + dc;
@@ -43,15 +43,11 @@ export function validateScatter(
   const q1 = pieceAt(b, l1);
   const q2 = pieceAt(b, l2);
 
-  // Friendly occupancy blocks (cannot land on own pieces)
   if (q1 && ownerOf(q1) === ownerOf(me)) return { l1, l2, can: false, reason: 'Ally on l1' };
   if (q2 && ownerOf(q2) === ownerOf(me)) return { l1, l2, can: false, reason: 'Ally on l2' };
 
-  // Blocked path from `from` to `base`: must be reachable by sliding (scatterBases enforces this for V3+)
-  // For V2, base === from, so fine.
-
-  // Capture budget: sum of enemy values on l1+l2 must be <= king’s current value (your correction)
-  const myVal = valueAt(b, from); // attacker current value (ability tier; if you want full counters±rays use that instead)
+  // Budget: enemies total value <= king's current value (ability tier)
+  const myVal = valueAt(b, from);
   let enemySum = 0;
   if (q1 && ownerOf(q1) !== ownerOf(me)) enemySum += valueAt(b, l1);
   if (q2 && ownerOf(q2) !== ownerOf(me)) enemySum += valueAt(b, l2);

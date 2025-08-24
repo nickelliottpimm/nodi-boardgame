@@ -1,174 +1,181 @@
+// src/store/gameStore.ts
 import { create } from 'zustand';
-import type { Board, Piece } from '../game/rules';
-import { pieceAt, isKing, rotateArrow, ownerOf } from '../game/rules';
+import type { Coord, Dir } from '../game/types';
+import { DIRS } from '../game/types';
+import type { Board, Piece, Player } from '../game/rules';
+import { pieceAt, isKing, ownerOf } from '../game/rules';
 import { initialBoard } from '../game/setupBoard';
 
-import type { Coord } from '../game/types';
-
-selected: null as Coord | null,
-
-// Map a (dr, dc) step into one of the 8 directions
-function deltaToDir(dr: number, dc: number): 'N'|'NE'|'E'|'SE'|'S'|'SW'|'W'|'NW' {
-  if (dr < 0 && dc === 0) return 'N';
-  if (dr < 0 && dc > 0)  return 'NE';
-  if (dr === 0 && dc > 0) return 'E';
-  if (dr > 0 && dc > 0)  return 'SE';
-  if (dr > 0 && dc === 0) return 'S';
-  if (dr > 0 && dc < 0)  return 'SW';
-  if (dr === 0 && dc < 0) return 'W';
-  if (dr < 0 && dc < 0)  return 'NW';
-  return 'N';
-}
-
-type State = {
+type Move = {
   board: Board;
-  turn: 'White'|'Black';
-  selected?: Coord;
-  freeOrientationPhase: boolean;
-  history: { board: Board; turn: 'White'|'Black' }[];
-  canUndo: boolean;
+  turn: Player;
+  selected: Coord | null;
 };
 
-type Actions = {
-  reset: ()=>void;
-  undo: ()=>void;
-  select: (pos:Coord)=>void;
-  startFreeOrientation: ()=>void;
-  endFreeOrientation: ()=>void;
-  actRotateArrow: (pos:Coord, dir:'CW'|'CCW', freePhase:boolean)=>void;
-  actMove: (from:Coord, to:Coord, isCapture?:boolean)=>void;
-  actCombine: (from:Coord, to:Coord)=>void;
-  actScatter: (from:Coord, l1:Coord, l2:Coord)=>void;
-  endTurn: ()=>void;
-};
+type RotateDir = 'CW' | 'CCW';
 
-function cloneBoard(b:Board): Board {
-  return b.map(row => row.map(cell => cell.piece ? { piece: {
-    counters: cell.piece!.counters.map(c=>({ ...c })) as any,
-    arrowDir: cell.piece!.arrowDir
-  }} : {}));
+function cloneBoard(b: Board): Board {
+  return b.map(row =>
+    row.map(cell =>
+      cell ? { counters: cell.counters.map(c => ({ ...c })), arrowDir: cell.arrowDir } : null
+    )
+  );
 }
 
-export const useGame = create<State & Actions>((set, get)=>({
-  board: initialBoard(),
-  turn: 'Black',
-  selected: undefined,
-  freeOrientationPhase: false,
-  history: [],
-  canUndo: false,
+function deltaToDir(dr: number, dc: number): Dir | null {
+  if (dr === -1 && dc === 0) return 'N';
+  if (dr === -1 && dc === 1) return 'NE';
+  if (dr === 0 && dc === 1) return 'E';
+  if (dr === 1 && dc === 1) return 'SE';
+  if (dr === 1 && dc === 0) return 'S';
+  if (dr === 1 && dc === -1) return 'SW';
+  if (dr === 0 && dc === -1) return 'W';
+  if (dr === -1 && dc === -1) return 'NW';
+  return null;
+}
 
-reset: () => set({
+function rotateCW(dir: Dir): Dir {
+  const order: Dir[] = ['N','NE','E','SE','S','SW','W','NW'];
+  const i = order.indexOf(dir);
+  return order[(i + 1) % 8];
+}
+
+export interface GameState {
+  board: Board;
+  turn: Player;
+  selected: Coord | null;
+  history: Move[];
+  canUndo: boolean;
+
+  select: (pos: Coord | null) => void;
+  reset: () => void;
+  undo: () => void;
+
+  endTurn: () => void;
+  actMove: (from: Coord, to: Coord, isCapture: boolean) => void;
+  actCombine: (from: Coord, to: Coord) => void;
+  actRotateArrow: (at: Coord, dir: RotateDir, consumeTurn: boolean) => void;
+  actScatter: (from: Coord, l1: Coord, l2: Coord) => void;
+}
+
+export const useGame = create<GameState>((set, get) => ({
   board: initialBoard(),
-  turn: 'Black',    // <— ensure resets to Black to move
+  turn: 'Black', // Black moves first
   selected: null,
-  canUndo: false,
   history: [],
-}),
+  canUndo: false,
 
-  undo: ()=> {
+  select: (pos) => set({ selected: pos }),
+
+  reset: () => set({
+    board: initialBoard(),
+    turn: 'Black',
+    selected: null,
+    history: [],
+    canUndo: false,
+  }),
+
+  undo: () => {
     const { history } = get();
     if (!history.length) return;
-    const prev = history[history.length-1];
+    const prev = history[history.length - 1];
     set({
       board: cloneBoard(prev.board),
       turn: prev.turn,
-      history: history.slice(0,-1),
-      canUndo: history.length-1>0,
-      selected: undefined,
-      freeOrientationPhase: false
+      selected: prev.selected,
+      history: history.slice(0, -1),
+      canUndo: history.length - 1 > 0
     });
   },
 
-  select: (pos)=> set({ selected: pos }),
-
-  startFreeOrientation: ()=> set({ freeOrientationPhase: true }),
-
-  endFreeOrientation: ()=> set({ freeOrientationPhase: false }),
-
-  actRotateArrow: (pos, dir, _freePhase)=> {
-    const { board } = get();
-    const cell = board[pos.r][pos.c];
-    if (!cell.piece || !isKing(cell.piece)) return;
-    rotateArrow(cell.piece, dir);
-    set({ board: cloneBoard(board) });
+  endTurn: () => {
+    const { turn } = get();
+    set({ turn: turn === 'White' ? 'Black' : 'White', selected: null });
   },
 
-  actMove: (from, to, isCapture=false)=> {
-    const { board } = get();
-    const f = board[from.r][from.c].piece!;
-    const t = board[to.r][to.c].piece;
-    const histPush = { board: cloneBoard(board), turn: get().turn };
-    if (isCapture && t) {
-      board[to.r][to.c].piece = f;
-      board[from.r][from.c].piece = undefined;
-    } else {
-      if (t) return; // combine path handles allies
-      board[to.r][to.c].piece = f;
-      board[from.r][from.c].piece = undefined;
-    }
-    set({ board: cloneBoard(board), history: [...get().history, histPush], canUndo: true, selected: undefined });
-  },
+  actMove: (from, to, isCapture) => {
+    const { board, turn, history, selected } = get();
+    const b = cloneBoard(board);
+    const p = pieceAt(b, from);
+    if (!p) return;
 
-actCombine: (from, to)=> {
-  const { board } = get();
-  const histPush = { board: cloneBoard(board), turn: get().turn };
+    if (isCapture) b[to.r][to.c] = null;
 
-const counter = { owner, isKey: false }; 
-  const mover = board[from.r]?.[from.c]?.piece;
-  const dest  = board[to.r]?.[to.c]?.piece;
-  if (!mover || !dest) return;
-  if (mover.counters.length !== 1 || dest.counters.length !== 1) return;
-  if (mover.counters[0].isKey || dest.counters[0].isKey) return;
-  if (mover.counters[0].owner !== dest.counters[0].owner) return;
+    b[to.r][to.c] = p;
+    b[from.r][from.c] = null;
 
-  const dr = to.r - from.r;
-  const dc = to.c - from.c;
-  const dir = deltaToDir(dr, dc);
-
-  const king: Piece = {
-    counters: [ { ...dest.counters[0] }, { ...mover.counters[0] } ] as [any, any],
-    arrowDir: dir,
-  };
-
-  board[to.r][to.c].piece = king;
-  board[from.r][from.c].piece = undefined;
-
-  set({
-    board: cloneBoard(board),
-    history: [...get().history, histPush],
-    canUndo: true,
-    selected: to,
-  });
-},
-
-  actScatter: (from, l1, l2)=> {
-    const { board } = get();
-    const histPush = { board: cloneBoard(board), turn: get().turn };
-    const king = board[from.r][from.c].piece!;
-    board[from.r][from.c].piece = undefined;
-    const a: Piece = { counters: [ { ...king.counters[0] } ] };
-    const b: Piece = { counters: [ { ...king.counters[1] } ] };
-    board[l1.r][l1.c].piece = a;
-    board[l2.r][l2.c].piece = b;
-    set({ board: cloneBoard(board), history: [...get().history, histPush], canUndo: true, selected: undefined });
-  },
-
-  endTurn: ()=> {
-    const { board, turn } = get();
-    const opp: 'White'|'Black' = turn==='White' ? 'Black' : 'White';
-    let oppKeys = 0;
-    for (let r=0;r<8;r++) for (let c=0;c<8;c++){
-      const p = board[r][c].piece;
-      if (p && p.counters.some(cn=>cn.isKey && cn.owner===opp)) oppKeys++;
-    }
-    const histPush = { board: cloneBoard(board), turn: get().turn };
     set({
-      turn: opp,
-      history: [...get().history, histPush],
+      board: b,
+      history: [...history, { board: cloneBoard(board), turn, selected }],
       canUndo: true,
-      selected: undefined,
-      freeOrientationPhase: false
+      selected: to
     });
-    if (oppKeys===0) alert(`${turn} wins!`);
+  },
+
+  actCombine: (from, to) => {
+    const { board, turn, history, selected } = get();
+    const b = cloneBoard(board);
+    const a = pieceAt(b, from);
+    const target = pieceAt(b, to);
+    if (!a || !target) return;
+    // keys cannot stack
+    if (a.counters.some(c => c.isKey) || target.counters.some(c => c.isKey)) return;
+
+    const dr = to.r - from.r;
+    const dc = to.c - from.c;
+    const dir = deltaToDir(Math.sign(dr), Math.sign(dc)) || 'N';
+
+    const merged: Piece = {
+      counters: [...target.counters, ...a.counters],
+      arrowDir: dir
+    };
+    b[to.r][to.c] = merged;
+    b[from.r][from.c] = null;
+
+    set({
+      board: b,
+      history: [...history, { board: cloneBoard(board), turn, selected }],
+      canUndo: true,
+      selected: to
+    });
+  },
+
+  actRotateArrow: (at, dir, _consumeTurn) => {
+    const { board, turn, history, selected } = get();
+    const b = cloneBoard(board);
+    const p = pieceAt(b, at);
+    if (!p || !isKing(p) || !p.arrowDir) return;
+
+    if (dir === 'CW') p.arrowDir = rotateCW(p.arrowDir);
+
+    set({
+      board: b,
+      history: [...history, { board: cloneBoard(board), turn, selected }],
+      canUndo: true
+    });
+  },
+
+  actScatter: (from, l1, l2) => {
+    const { board, turn, history, selected } = get();
+    const b = cloneBoard(board);
+    const king = pieceAt(b, from);
+    if (!king || !isKing(king) || !king.arrowDir) return;
+
+    // remove targets (capture)
+    b[l1.r][l1.c] = null;
+    b[l2.r][l2.c] = null;
+
+    // split counters to singles
+    const [c1, c2] = king.counters;
+    b[l1.r][l1.c] = { counters: [{ ...c1 }] };
+    b[l2.r][l2.c] = { counters: [{ ...c2 }] };
+    b[from.r][from.c] = null;
+
+    set({
+      board: b,
+      history: [...history, { board: cloneBoard(board), turn, selected }],
+      canUndo: true,
+      selected: null
+    });
   },
 }));
