@@ -1,4 +1,5 @@
 /* src/styles.css */
+declare module "*.css";
 :root { --bg:#141414; --pane:#1d1d1d; --grid:#2c2c2c; }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
