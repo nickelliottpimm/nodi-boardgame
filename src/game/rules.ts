@@ -1,135 +1,159 @@
 // src/game/rules.ts
+import { DIRS } from "./types";
 import type { Coord, Dir } from "./types";
-import { DIRS, inBounds } from "./types";
 
-export type Player = "White" | "Black";
+/** Players */
+export type Player = "Black" | "White";
 
-export interface Counter {
-  owner: Player;
-  isKey?: boolean;
-}
-
-export interface Piece {
-  counters: Counter[];       // 1 = single, 2 = king
-  arrowDir?: Dir;            // only on kings
-}
-
-export type Board = (Piece | null)[][];
-
-/** Create an empty 8×8 board */
+// create an empty 8×8 board
 export function emptyBoard(): Board {
   return Array.from({ length: 8 }, () => Array(8).fill(null));
 }
 
+
+/** A single counter (token) on a piece */
+export type Counter = {
+  owner: Player;
+  isKey?: boolean;
+};
+
+/** A board piece (single or king). Kings have 2 counters and an arrowDir. */
+export type Piece = {
+  counters: Counter[];      // length 1 = single; length 2 = king
+  arrowDir?: Dir;           // only meaningful for kings
+};
+
+/** 8x8 board of pieces (null for empty) */
+export type Board = (Piece | null)[][];
+
+/** utils */
+const inBounds = (r: number, c: number) => r >= 0 && r < 8 && c >= 0 && c < 8;
+
+/** piece helpers */
 export function pieceAt(b: Board, pos: Coord): Piece | null {
-  return inBounds(pos.r, pos.c) ? b[pos.r][pos.c] : null;
+  if (!inBounds(pos.r, pos.c)) return null;
+  return b[pos.r][pos.c];
 }
-
-export function ownerOf(p: Piece): Player {
-  return p.counters[0].owner;
-}
-
 export function isKing(p: Piece): boolean {
   return p.counters.length === 2;
 }
-
-export function isEmpty(b: Board, pos: Coord): boolean {
-  return !pieceAt(b, pos);
+export function ownerOf(p: Piece): Player {
+  // all counters on a piece share the same owner
+  return p.counters[0].owner;
+}
+/** identify key pieces (contain a key counter) */
+export function isKeyPiece(p: Piece): boolean {
+  return p.counters.some((c) => c.isKey);
 }
 
-/** Ability value used for movement gating (0–3+) */
-export function valueAt(b: Board, pos: Coord): number {
-  const p = pieceAt(b, pos);
-  if (!p) return 0;
-  // baseline = number of counters (1 or 2). In your full game you also add +/- from rays, but
-  // for ability gating we clamp to 0..3:
-  const v = p.counters.length;
-  return Math.max(0, Math.min(3, v));
-}
-
-/** Compute ability values board-wide (for overlays if needed) */
-export function computeValues(b: Board): number[][] {
-  const out: number[][] = [];
-  for (let r = 0; r < 8; r++) {
-    out[r] = [];
-    for (let c = 0; c < 8; c++) {
-      out[r][c] = valueAt(b, { r, c });
-    }
-  }
-  return out;
-}
-
-/** Returns the ray squares for a king (straight line, blocked by first piece) */
+/**
+ * Ray squares for a king from `from` (NOT including origin).
+ * Stops after hitting the first blocking square (which IS included).
+ */
 export function getRayForKing(b: Board, from: Coord): Coord[] {
   const p = pieceAt(b, from);
   if (!p || !isKing(p) || !p.arrowDir) return [];
-
   const [dr, dc] = DIRS[p.arrowDir];
+
   const out: Coord[] = [];
-  let r = from.r + dr, c = from.c + dc;
+  let r = from.r + dr;
+  let c = from.c + dc;
+
   while (inBounds(r, c)) {
     out.push({ r, c });
-    if (pieceAt(b, { r, c })) break; // stop at first piece
-    r += dr; c += dc;
+    if (pieceAt(b, { r, c })) break; // include blocker, then stop
+    r += dr;
+    c += dc;
   }
   return out;
 }
 
-/** Basic legal moves for a piece (step, combines, captures, plus king’s arrow moves) */
-export function legalMovesFor(b: Board, from: Coord) {
-  const p = pieceAt(b, from);
-  if (!p) return { moves: [], combines: [], captures: [], scatters: [] };
+/**
+ * Ability value used for movement gating (0–3).
+ * Base = number of counters (1 or 2), then ±1 for each allied/enemy ray that hits this square.
+ * Self-ray does NOT count (we use getRayForKing on *other* kings only).
+ * Values below 0 clamp to 0; above 3 clamp to 3 (rules say ≥3 functions as 3).
+ */
+export function valueAt(b: Board, pos: Coord): number {
+  const p = pieceAt(b, pos);
+  if (!p) return 0;
 
-  const val = valueAt(b, from);
-  const me = ownerOf(p);
+  // base from counters
+  let v = p.counters.length;
 
-  const moves: Coord[] = [];
-  const combines: Coord[] = [];
-  const captures: Coord[] = [];
-
-  // Value 0 cannot move
-  if (val === 0) return { moves, combines, captures, scatters: [] };
-
-  // Step 1: normal one-step moves (all 8 directions)
-  for (const [dr, dc] of Object.values(DIRS)) {
-    const r = from.r + dr, c = from.c + dc;
-    if (!inBounds(r, c)) continue;
-    const q = pieceAt(b, { r, c });
-    if (!q) {
-      moves.push({ r, c });
-    } else if (ownerOf(q) === me && !isKing(q) && !isKing(p)) {
-      // combine only single + single
-      combines.push({ r, c });
-    } else if (ownerOf(q) !== me) {
-      const theirVal = valueAt(b, { r, c });
-      if (val >= theirVal) captures.push({ r, c });
-    }
-  }
-
-  // Step 2: arrow-based moves if king
-  if (isKing(p) && p.arrowDir) {
-    const [dr, dc] = DIRS[p.arrowDir];
-    if (val >= 2) {
-      // V2: move 2 forward if empty
-      const r = from.r + dr * 2, c = from.c + dc * 2;
-      if (inBounds(r, c) && !pieceAt(b, { r, c })) moves.push({ r, c });
-    }
-    if (val >= 3) {
-      // V3+: slide along ray until blocked
-      let r = from.r + dr, c = from.c + dc;
-      while (inBounds(r, c)) {
-        const q = pieceAt(b, { r, c });
-        if (!q) {
-          moves.push({ r, c });
-        } else {
-          const theirVal = valueAt(b, { r, c });
-          if (ownerOf(q) !== me && val >= theirVal) captures.push({ r, c });
-          break;
-        }
-        r += dr; c += dc;
+  // accumulate rays from ALL kings on board (no self-boost: rays exclude origin by design)
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const q = b[r][c];
+      if (!q || !isKing(q) || !q.arrowDir) continue;
+      // if this ray hits 'pos', apply ±1
+      const ray = getRayForKing(b, { r, c }); // no origin included
+      if (ray.some((s) => s.r === pos.r && s.c === pos.c)) {
+        v += ownerOf(q) === ownerOf(p) ? 1 : -1;
       }
     }
   }
 
-  return { moves, combines, captures, scatters: [] };
+  // clamp to movement ability band
+  if (v <= 0) return 0;
+  if (v >= 3) return 3;
+  return v; // 1 or 2
+}
+
+/**
+ * Basic legal destinations used by UI highlighting:
+ *  - one-step moves/captures (value ≥ 1)
+ *  - combines (single → adjacent friendly single) but *never* with key pieces
+ *
+ * King slides / scatter etc. are handled elsewhere (scatter/rotate flows).
+ */
+export function legalMovesFor(
+  board: Board,
+  from: Coord
+): { moves: Coord[]; combines: Coord[]; captures: Coord[] } {
+  const me = pieceAt(board, from);
+  if (!me) return { moves: [], combines: [], captures: [] };
+
+  const myOwner = ownerOf(me);
+  const myVal = valueAt(board, from);
+
+  const neigh: Coord[] = [
+    { r: from.r - 1, c: from.c - 1 }, { r: from.r - 1, c: from.c     }, { r: from.r - 1, c: from.c + 1 },
+    { r: from.r,     c: from.c - 1 },                                     { r: from.r,     c: from.c + 1 },
+    { r: from.r + 1, c: from.c - 1 }, { r: from.r + 1, c: from.c     }, { r: from.r + 1, c: from.c + 1 },
+  ];
+
+  const moves: Coord[] = [];
+  const captures: Coord[] = [];
+  const combines: Coord[] = [];
+
+  // (A) one-step moves/captures if we have at least value 1
+  if (myVal >= 1) {
+    for (const q of neigh) {
+      if (!inBounds(q.r, q.c)) continue;
+      const t = pieceAt(board, q);
+      if (!t) {
+        moves.push(q);
+      } else {
+        if (ownerOf(t) !== myOwner) {
+          const tv = valueAt(board, q);
+          if (tv <= myVal) captures.push(q);
+        }
+      }
+    }
+  }
+
+  // (B) combines: only if "me" is a non-key single, onto a friendly non-key single, and we can move (value ≥ 1)
+  if (myVal >= 1 && !isKing(me) && !isKeyPiece(me)) {
+    for (const q of neigh) {
+      if (!inBounds(q.r, q.c)) continue;
+      const t = pieceAt(board, q);
+      if (!t) continue;
+      if (!isKing(t) && ownerOf(t) === myOwner && !isKeyPiece(t)) {
+        combines.push(q);
+      }
+    }
+  }
+
+  return { moves, combines, captures };
 }
