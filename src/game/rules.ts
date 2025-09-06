@@ -115,7 +115,8 @@ export function legalMovesFor(
   if (!me) return { moves: [], combines: [], captures: [] };
 
   const myOwner = ownerOf(me);
-  const myVal = valueAt(board, from);
+  const myVal = valueAt(board, from); // 0..3 (3 == 3+ ability)
+  const inBounds = (r: number, c: number) => r >= 0 && r < 8 && c >= 0 && c < 8;
 
   const neigh: Coord[] = [
     { r: from.r - 1, c: from.c - 1 }, { r: from.r - 1, c: from.c     }, { r: from.r - 1, c: from.c + 1 },
@@ -127,33 +128,77 @@ export function legalMovesFor(
   const captures: Coord[] = [];
   const combines: Coord[] = [];
 
-  // (A) one-step moves/captures if we have at least value 1
+  // (A) one-step moves/captures (value >= 1)
   if (myVal >= 1) {
     for (const q of neigh) {
       if (!inBounds(q.r, q.c)) continue;
       const t = pieceAt(board, q);
       if (!t) {
         moves.push(q);
-      } else {
-        if (ownerOf(t) !== myOwner) {
-          const tv = valueAt(board, q);
-          if (tv <= myVal) captures.push(q);
-        }
+      } else if (ownerOf(t) !== myOwner) {
+        const tv = valueAt(board, q);
+        if (tv <= myVal) captures.push(q);
       }
     }
   }
 
-  // (B) combines: only if "me" is a non-key single, onto a friendly non-key single, and we can move (value ≥ 1)
+  // (B) combines (single -> adjacent friendly single), but *never* with keys; needs value >= 1
   if (myVal >= 1 && !isKing(me) && !isKeyPiece(me)) {
     for (const q of neigh) {
       if (!inBounds(q.r, q.c)) continue;
       const t = pieceAt(board, q);
-      if (!t) continue;
-      if (!isKing(t) && ownerOf(t) === myOwner && !isKeyPiece(t)) {
+      if (t && !isKing(t) && ownerOf(t) === myOwner && !isKeyPiece(t)) {
         combines.push(q);
+      }
+    }
+  }
+
+  // (C) King arrow-directed movement
+  if (isKing(me) && myVal >= 2 && me.arrowDir) {
+    // V2: 2-step straight along the arrow; mid must be empty; destination empty or enemy<=myVal
+    if (myVal === 2) {
+      const [dr, dc] = DIRS[me.arrowDir];
+      const mid: Coord = { r: from.r + dr, c: from.c + dc };
+      const dst: Coord = { r: from.r + 2 * dr, c: from.c + 2 * dc };
+      if (inBounds(mid.r, mid.c) && inBounds(dst.r, dst.c)) {
+        const midP = pieceAt(board, mid);
+        if (!midP) {
+          const t = pieceAt(board, dst);
+          if (!t) {
+            moves.push(dst);
+          } else if (ownerOf(t) !== myOwner) {
+            const tv = valueAt(board, dst);
+            if (tv <= myVal) captures.push(dst);
+          }
+          // friendly on dst blocks; enemy with higher value blocks
+        }
+      }
+    }
+
+    // V3+: slide full length along the arrow until blocked; may capture first enemy if <= myVal
+    if (myVal >= 3) {
+      // getRayForKing returns squares along the arrow, excluding origin, including first blocker
+      const ray = getRayForKing(board, from);
+      for (const q of ray) {
+        const t = pieceAt(board, q);
+        if (!t) {
+          // empty: we can move here and continue scanning
+          moves.push(q);
+          continue;
+        }
+        if (ownerOf(t) === myOwner) {
+          // friendly blocks; cannot move further
+          break;
+        } else {
+          // enemy blocks; capture allowed if enemy value <= myVal; then stop
+          const tv = valueAt(board, q);
+          if (tv <= myVal) captures.push(q);
+          break;
+        }
       }
     }
   }
 
   return { moves, combines, captures };
 }
+
