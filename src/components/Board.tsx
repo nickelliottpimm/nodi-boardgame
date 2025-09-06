@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import cn from "classnames";
 import { SQUARE, DIRS } from "../game/types";
 import type { Coord } from "../game/types";
-import type { Board, Piece, Player } from "../game/rules";
+import type { Board, Player } from "../game/rules";
 import {
   isKing,
   pieceAt,
@@ -11,12 +11,13 @@ import {
   legalMovesFor,
   getRayForKing,
   ownerOf,
-  isKeyPiece,          // ⬅️ NEW: import this
+  isKeyPiece,
 } from "../game/rules";
 import { scatterBases, validateScatter } from "../game/scatter";
 import { PieceView } from "./Piece";
 import { RayOverlay } from "./RayOverlay";
 import { useGame } from "../store/gameStore";
+
 
 type AllDir = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
 const DIR_ORDER: AllDir[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
