@@ -1,5 +1,6 @@
 // src/game/moveGen.ts
-import type { Board, Coord, Piece, Player } from "./rules";
+import type { Board, Piece, Player } from "./rules";
+import type { Coord } from "./types";
 import { pieceAt, ownerOf, valueAt } from "./rules";
 
 const DIRS: Record<string, [number, number]> = {
@@ -18,7 +19,7 @@ export function generateKingArrowMoves(
   pos: Coord,
   piece: Piece,
   val: number,
-  turn: Player           // ✅ "Black" | "White" matches ownerOf(...)
+  turn: Player
 ) {
   const results: { type: "move" | "capture"; to: Coord }[] = [];
   if (!piece.arrowDir) return results;
@@ -26,7 +27,7 @@ export function generateKingArrowMoves(
   const [dr, dc] = DIRS[piece.arrowDir];
 
   if (val === 2) {
-    // exactly two steps along arrow; mid must be empty
+    // exactly two steps; mid must be empty
     const mid = { r: pos.r + dr, c: pos.c + dc };
     const dst = { r: pos.r + 2 * dr, c: pos.c + 2 * dc };
     const inBounds = (p: Coord) => p.r >= 0 && p.r < 8 && p.c >= 0 && p.c < 8;
@@ -39,7 +40,7 @@ export function generateKingArrowMoves(
       }
     }
   } else if (val >= 3) {
-    // slide any distance until blocked; capture first enemy if value allows
+    // slide any distance until blocked; capture first enemy if allowed
     let r = pos.r + dr, c = pos.c + dc;
     while (r >= 0 && r < 8 && c >= 0 && c < 8) {
       const q = { r, c };
@@ -50,7 +51,7 @@ export function generateKingArrowMoves(
         if (ownerOf(t) !== turn && valueAt(board, q) <= val) {
           results.push({ type: "capture", to: q });
         }
-        break; // stop at first blocker
+        break;
       }
       r += dr; c += dc;
     }
