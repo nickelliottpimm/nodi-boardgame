@@ -173,7 +173,6 @@ export function BoardView() {
         if (canComb) actCombine(selected, pos);
         else actMove(selected, pos, canCap);
         setAnim(null);
-        endTurn();
       }, 180);
       return;
     }
@@ -216,7 +215,6 @@ export function BoardView() {
       let steps = (DIR_ORDER.indexOf(previewDir) - DIR_ORDER.indexOf(cur) + 8) % 8;
       for (let i = 0; i < steps; i++) actRotateArrow(selected, "CW", false);
       const ability = valueAt(board, selected);
-      if (ability === 2) endTurn(); // V2: rotation uses the turn
     }
     setRotateMode(false);
     setPreviewDir(null);
@@ -269,7 +267,6 @@ return { bases, base, ...val };
             setAnim(null);
             setScatterMode(false);
             setScatterBase(null);
-            endTurn();
           }, 200);
         } else if (rotateMode) {
           confirmRotation();
@@ -492,7 +489,6 @@ return { bases, base, ...val };
                           setAnim(null);
                           setScatterMode(false);
                           setScatterBase(null);
-                          endTurn();
                         }, 200);
                       }}
                     >
