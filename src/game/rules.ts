@@ -1,6 +1,7 @@
 // src/game/rules.ts
 import { DIRS } from "./types";
 import type { Coord, Dir } from "./types";
+export type { Coord, Dir } from "./types";
 
 /** Players */
 export type Player = "Black" | "White";

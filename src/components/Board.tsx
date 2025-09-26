@@ -18,7 +18,6 @@ import { PieceView } from "./Piece";
 import { RayOverlay } from "./RayOverlay";
 import { useGame } from "../store/gameStore";
 
-
 type AllDir = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
 const DIR_ORDER: AllDir[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 
@@ -78,7 +77,7 @@ export function BoardView() {
     actCombine,
     actRotateArrow,
     actScatter,
-    endTurn,
+    // endTurn removed (was unused)
   } = useGame();
 
   const [hover, setHover] = useState<Coord | null>(null);
@@ -212,9 +211,12 @@ export function BoardView() {
     }
     const cur = (selectedPiece as any)?.arrowDir as AllDir | null;
     if (cur) {
-      let steps = (DIR_ORDER.indexOf(previewDir) - DIR_ORDER.indexOf(cur) + 8) % 8;
-      for (let i = 0; i < steps; i++) actRotateArrow(selected, "CW", false);
-      const ability = valueAt(board, selected);
+      const steps = (DIR_ORDER.indexOf(previewDir) - DIR_ORDER.indexOf(cur) + 8) % 8;
+      for (let i = 0; i < steps; i++) {
+        // store API expects "cw" | "ccw" (lowercase), no extra args
+        actRotateArrow(selected, "cw");
+      }
+      // removed unused 'ability' variable
     }
     setRotateMode(false);
     setPreviewDir(null);
@@ -234,8 +236,8 @@ export function BoardView() {
     const base =
       scatterBase && bases.some((b) => coordEq(b, scatterBase)) ? scatterBase : bases[0];
     const val = validateScatter(board, selected, base) ?? { l1: base, l2: base, can: false };
-return { bases, base, ...val };
- // { l1, l2, can, reason }
+    return { bases, base, ...val };
+    // { l1, l2, can, reason }
   }, [board, selected, scatterMode, scatterBase]);
 
   // Hotkeys

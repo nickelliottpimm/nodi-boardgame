@@ -1,6 +1,6 @@
 // src/store/gameStore.ts
 import { create } from "zustand";
-import type { Board, Coord, Piece, Player } from "../game/rules";
+import type { Board, Coord, Player, Dir } from "../game/rules";
 import {
   pieceAt,
   isKing,
@@ -37,9 +37,11 @@ type GameState = {
   select: (pos: Coord | null) => void;
   actMove: (from: Coord, to: Coord, isCapture?: boolean) => void;
   actCombine: (from: Coord, onto: Coord) => void;
-
-  // scatter commits come from your scatter flow in Board.tsx
   actScatter: (from: Coord, l1: Coord, l2: Coord) => void;
+
+  // NEW: rotation + explicit endTurn
+  actRotateArrow: (at: Coord, dir: "cw" | "ccw") => void;
+  endTurn: () => void;
 };
 
 function cloneBoard(b: Board): Board {
@@ -61,6 +63,9 @@ const ADJ: [number, number][] = [
   [ 0, -1],          [ 0, 1],
   [ 1, -1], [ 1, 0], [ 1, 1],
 ];
+
+// canonical order for 8-direction rotation
+const DIR_ORDER: Dir[] = ["N","NE","E","SE","S","SW","W","NW"];
 
 export const useGame = create<GameState>((set, get) => ({
   board: initialBoard(),
@@ -94,6 +99,14 @@ export const useGame = create<GameState>((set, get) => ({
       history: [],
       canUndo: false,
     });
+  },
+
+  endTurn: () => {
+    set(state => ({
+      turn: state.turn === "Black" ? "White" : "Black",
+      selected: null,
+      highlights: [],
+    }));
   },
 
   select: (pos) => {
@@ -148,7 +161,7 @@ export const useGame = create<GameState>((set, get) => ({
   },
 
   actMove: (from, to, isCapture = false) => {
-    const { board, turn, history } = get();
+    const { board, turn, history, endTurn } = get();
     const p = pieceAt(board, from);
     if (!p) return;
 
@@ -161,20 +174,18 @@ export const useGame = create<GameState>((set, get) => ({
     next[to.r][to.c] = p;
     next[from.r][from.c] = null;
 
-    // push snapshot, toggle turn HERE (single source of truth)
+    // push snapshot; apply board; then endTurn()
     const snap: Snapshot = { board: cloneBoard(board), turn };
     set({
       board: next,
-      turn: turn === "Black" ? "White" : "Black",
-      selected: null,
-      highlights: [],
       history: [...history, snap],
       canUndo: true,
     });
+    endTurn();
   },
 
   actCombine: (from, onto) => {
-    const { board, turn, history } = get();
+    const { board, turn, history, endTurn } = get();
     const a = pieceAt(board, from);
     const b = pieceAt(board, onto);
     if (!a || !b) return;
@@ -186,7 +197,7 @@ export const useGame = create<GameState>((set, get) => ({
     // Arrow = direction of the move (from -> onto)
     const dr = Math.sign(onto.r - from.r);
     const dc = Math.sign(onto.c - from.c);
-    const DIR_FROM_DELTA: Record<string, any> = {
+    const DIR_FROM_DELTA: Record<string, Dir> = {
       "-1,0": "N", "-1,1": "NE", "0,1": "E", "1,1": "SE",
       "1,0": "S", "1,-1": "SW", "0,-1": "W", "-1,-1": "NW",
     };
@@ -204,16 +215,14 @@ export const useGame = create<GameState>((set, get) => ({
     const snap: Snapshot = { board: cloneBoard(board), turn };
     set({
       board: next,
-      turn: turn === "Black" ? "White" : "Black",
-      selected: null,
-      highlights: [],
       history: [...history, snap],
       canUndo: true,
     });
+    endTurn();
   },
 
   actScatter: (from, l1, l2) => {
-    const { board, turn, history } = get();
+    const { board, turn, history, endTurn } = get();
     const me = pieceAt(board, from);
     if (!me || !isKing(me)) return;
 
@@ -236,11 +245,36 @@ export const useGame = create<GameState>((set, get) => ({
     const snap: Snapshot = { board: cloneBoard(board), turn };
     set({
       board: next,
-      turn: turn === "Black" ? "White" : "Black",
-      selected: null,
-      highlights: [],
       history: [...history, snap],
       canUndo: true,
     });
+    endTurn();
+  },
+
+  actRotateArrow: (at, dir) => {
+    const { board, turn, history, endTurn } = get();
+    const p = pieceAt(board, at);
+    if (!p || !isKing(p) || !p.arrowDir) return;
+    if (ownerOf(p) !== turn) return;
+
+    // compute next direction
+    const idx = DIR_ORDER.indexOf(p.arrowDir);
+    if (idx === -1) return;
+    const nextIdx = dir === "cw" ? (idx + 1) % DIR_ORDER.length
+                                 : (idx + DIR_ORDER.length - 1) % DIR_ORDER.length;
+    const newDir: Dir = DIR_ORDER[nextIdx];
+
+    const snap: Snapshot = { board: cloneBoard(board), turn };
+    const next = cloneBoard(board);
+    const pp = pieceAt(next, at);
+    if (!pp) return;
+    (pp as typeof p).arrowDir = newDir;
+
+    set({
+      board: next,
+      history: [...history, snap],
+      canUndo: true,
+    });
+    endTurn();
   },
 }));
