@@ -65,7 +65,7 @@ const ADJ: [number, number][] = [
 ];
 
 // canonical order for 8-direction rotation
-const DIR_ORDER: Dir[] = ["N","NE","E","SE","S","SW","W","NW"];
+const _DIR_ORDER: Dir[] = ["N","NE","E","SE","S","SW","W","NW"];
 
 export const useGame = create<GameState>((set, get) => ({
   board: initialBoard(),
