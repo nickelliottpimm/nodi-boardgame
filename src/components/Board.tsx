@@ -21,6 +21,9 @@ import { useGame } from "../store/gameStore";
 type AllDir = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
 const DIR_ORDER: AllDir[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 
+// Keep action buttons stable width so layout doesn't jump
+const BTN_W = 120; // px — adjust if you want wider buttons
+
 function dirToAngle(dir: AllDir) {
   switch (dir) {
     case "N": return 0;
@@ -202,25 +205,20 @@ export function BoardView() {
     setPreviewDir((prev) => prev ? nextCW(prev) : cur ? nextCW(cur) : "N");
   }
 
-  // Confirm/cancel rotation
-  function confirmRotation() {
-    if (!selected || !selectedIsKing || !previewDir) {
-      setRotateMode(false);
-      setPreviewDir(null);
-      return;
-    }
-    const cur = (selectedPiece as any)?.arrowDir as AllDir | null;
-    if (cur) {
-      const steps = (DIR_ORDER.indexOf(previewDir) - DIR_ORDER.indexOf(cur) + 8) % 8;
-      for (let i = 0; i < steps; i++) {
-        // store API expects "cw" | "ccw" (lowercase), no extra args
-        actRotateArrow(selected, "cw");
-      }
-      // removed unused 'ability' variable
-    }
+function confirmRotation() {
+  if (!selected || !selectedIsKing || !previewDir) {
     setRotateMode(false);
     setPreviewDir(null);
+    return;
   }
+  // Set the arrow directly to the previewDir (absolute), not step-by-step
+  // Store API accepts "cw" | "ccw" | Dir, so pass the Dir:
+  actRotateArrow(selected, previewDir as any);
+
+  setRotateMode(false);
+  setPreviewDir(null);
+}
+
   function cancelRotation() {
     setRotateMode(false);
     setPreviewDir(null);
@@ -402,104 +400,118 @@ export function BoardView() {
             </div>
 
             {/* Rotate buffered controls */}
-            {selectedIsKing && canOrientNow && (
-              <div
-                style={{
-                  marginTop: 12,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 6,
-                }}
-              >
-                {!rotateMode ? (
-                  <button
-                    onClick={() => {
-                      const cur = (selectedPiece as any)?.arrowDir as AllDir | null;
-                      setRotateMode(true);
-                      setPreviewDir(cur ? nextCW(cur) : "N");
-                    }}
-                  >
-                    Rotate
-                  </button>
-                ) : (
-                  <>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <button onClick={cycleCW}>Rotate</button>
-                    </div>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button onClick={cancelRotation}>Cancel Rotation</button>
-                      <button className="primary" onClick={confirmRotation}>
-                        Confirm Rotation
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
+{selectedIsKing && canOrientNow && (
+  <div
+    style={{
+      marginTop: 12,
+      display: "flex",
+      flexDirection: "column",
+      gap: 6,
+    }}
+  >
+    {!rotateMode ? (
+      <button
+        style={{ width: BTN_W }}
+        onClick={() => {
+          const cur = (selectedPiece as any)?.arrowDir as AllDir | null;
+          setRotateMode(true);
+          setPreviewDir(cur ? nextCW(cur) : "N");
+        }}
+      >
+        Rotate
+      </button>
+    ) : (
+      <>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button style={{ width: BTN_W }} onClick={cycleCW}>
+            Rotate
+          </button>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button style={{ width: BTN_W }} onClick={cancelRotation}>
+            Cancel Rotation
+          </button>
+          <button
+            className="primary"
+            style={{ width: BTN_W }}
+            onClick={confirmRotation}
+          >
+            Confirm Rotation
+          </button>
+        </div>
+      </>
+    )}
+  </div>
+)}
+
 
             {/* Scatter controls */}
-            {selectedIsKing && (
-              <div
-                style={{
-                  marginTop: 12,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 6,
-                }}
-              >
-                {!scatterMode ? (
-                  <button
-                    className="primary"
-                    onClick={() => {
-                      if (!selected) return;
-                      setScatterMode(true);
-                      setScatterBase(selected);
-                    }}
-                  >
-                    Scatter
-                  </button>
-                ) : (
-                  <>
-                    <button
-                      onClick={() => {
-                        setScatterMode(false);
-                        setScatterBase(null);
-                      }}
-                    >
-                      Cancel Scatter
-                    </button>
-                    <button
-                      className="primary"
-                      disabled={!scatterInfo?.can}
-                      onClick={() => {
-                        if (!selected || !scatterInfo) return;
-                        const owner = ownerOf(pieceAt(board, selected)!);
-                        setAnim({
-                          kind: "scatter",
-                          from: selected,
-                          l1: scatterInfo.l1,
-                          l2: scatterInfo.l2,
-                          owner,
-                        });
-                        setAnimGo(false);
-                        requestAnimationFrame(() =>
-                          requestAnimationFrame(() => setAnimGo(true))
-                        );
-                        if (animTimer.current) window.clearTimeout(animTimer.current);
-                        animTimer.current = window.setTimeout(() => {
-                          actScatter(selected, scatterInfo.l1, scatterInfo.l2);
-                          setAnim(null);
-                          setScatterMode(false);
-                          setScatterBase(null);
-                        }, 200);
-                      }}
-                    >
-                      Confirm Scatter
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
+{selectedIsKing && (
+  <div
+    style={{
+      marginTop: 12,
+      display: "flex",
+      flexDirection: "column",
+      gap: 6,
+    }}
+  >
+    {!scatterMode ? (
+      <button
+        className="primary"
+        style={{ width: BTN_W }}
+        onClick={() => {
+          if (!selected) return;
+          setScatterMode(true);
+          setScatterBase(selected);
+        }}
+      >
+        Scatter
+      </button>
+    ) : (
+      <>
+        <button
+          style={{ width: BTN_W }}
+          onClick={() => {
+            setScatterMode(false);
+            setScatterBase(null);
+          }}
+        >
+          Cancel Scatter
+        </button>
+        <button
+          className="primary"
+          style={{ width: BTN_W }}
+          disabled={!scatterInfo?.can}
+          onClick={() => {
+            if (!selected || !scatterInfo) return;
+            const owner = ownerOf(pieceAt(board, selected)!);
+            setAnim({
+              kind: "scatter",
+              from: selected,
+              l1: scatterInfo.l1,
+              l2: scatterInfo.l2,
+              owner,
+            });
+            setAnimGo(false);
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => setAnimGo(true))
+            );
+            if (animTimer.current) window.clearTimeout(animTimer.current);
+            animTimer.current = window.setTimeout(() => {
+              actScatter(selected, scatterInfo.l1, scatterInfo.l2);
+              setAnim(null);
+              setScatterMode(false);
+              setScatterBase(null);
+            }, 200);
+          }}
+        >
+          Confirm Scatter
+        </button>
+      </>
+    )}
+  </div>
+)}
+
           </>
         ) : (
           <>

@@ -251,30 +251,59 @@ export const useGame = create<GameState>((set, get) => ({
     endTurn();
   },
 
-  actRotateArrow: (at, dir) => {
-    const { board, turn, history, endTurn } = get();
-    const p = pieceAt(board, at);
-    if (!p || !isKing(p) || !p.arrowDir) return;
-    if (ownerOf(p) !== turn) return;
+actRotateArrow: (at, dir) => {
+  const { board, turn, history, endTurn } = get();
+  const p = pieceAt(board, at);
+  if (!p || !isKing(p) || !p.arrowDir) return;
+  if (ownerOf(p) !== turn) return;
 
-    // compute next direction
-    const idx = DIR_ORDER.indexOf(p.arrowDir);
-    if (idx === -1) return;
-    const nextIdx = dir === "cw" ? (idx + 1) % DIR_ORDER.length
-                                 : (idx + DIR_ORDER.length - 1) % DIR_ORDER.length;
-    const newDir: Dir = DIR_ORDER[nextIdx];
+  // Value before rotation
+  const beforeVal = valueAt(board, at); // 0..3 (3 represents 3+ ability)
 
-    const snap: Snapshot = { board: cloneBoard(board), turn };
-    const next = cloneBoard(board);
-    const pp = pieceAt(next, at);
-    if (!pp) return;
-    (pp as typeof p).arrowDir = newDir;
+  // Snapshot for undo
+  const snap: Snapshot = { board: cloneBoard(board), turn };
 
-    set({
-      board: next,
-      history: [...history, snap],
-      canUndo: true,
-    });
+  // Clone, then apply rotation
+  const next = cloneBoard(board);
+  const target = pieceAt(next, at);
+  if (!target || !isKing(target) || !target.arrowDir) return;
+
+  const DIR_ORDER: Dir[] = ["N","NE","E","SE","S","SW","W","NW"];
+  const idx = DIR_ORDER.indexOf(target.arrowDir);
+
+  let newDir: Dir;
+  if (dir === "cw" || dir === "ccw") {
+    const nextIdx = dir === "cw"
+      ? (idx + 1) % DIR_ORDER.length
+      : (idx + DIR_ORDER.length - 1) % DIR_ORDER.length;
+    newDir = DIR_ORDER[nextIdx];
+  } else {
+    // dir is a Dir (absolute set)
+    newDir = dir as Dir;
+  }
+  target.arrowDir = newDir;
+
+  // Commit board & history
+  set({
+    board: next,
+    history: [...history, snap],
+    canUndo: true,
+    // keep selection so the UI still shows the same piece highlighted after rotation
+    selected: at,
+  });
+
+  // Recompute value after rotation with new ray directions applied
+  const afterVal = valueAt(next, at);
+
+  // Free rotation rule: if piece is 3+ either BEFORE or AFTER, do not consume turn
+  const isFree = beforeVal >= 3 || afterVal >= 3;
+
+  if (!isFree) {
     endTurn();
-  },
+  } else {
+    // stay on same turn and clear any temporary highlights
+    set({ highlights: [] });
+  }
+},
+
 }));
