@@ -1,5 +1,6 @@
 // src/components/Board.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
+import type React from "react";
 import cn from "classnames";
 import { SQUARE, DIRS } from "../game/types";
 import type { Coord } from "../game/types";
@@ -21,8 +22,56 @@ import { useGame } from "../store/gameStore";
 type AllDir = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
 const DIR_ORDER: AllDir[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 
-// Keep action buttons stable width so layout doesn't jump
-const BTN_W = 120; // px — adjust if you want wider buttons
+// ── Toolbar styles ────────────────────────────────────────────────────────────
+const BTN_W = 120;     // px — adjust if you want wider buttons
+const BTN_H = 34;
+
+const GROUP_STYLE: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  padding: "8px 10px",
+  border: "1px solid #2c2c2c",
+  borderRadius: 8,
+  background: "#161616",
+  minWidth: 160,
+};
+
+const ROW_STYLE: React.CSSProperties = {
+  display: "flex",
+  gap: 8,
+  alignItems: "center",
+  minHeight: BTN_H, // keep row height stable
+};
+
+const SLOT_STYLE: React.CSSProperties = {
+  display: "flex",
+  gap: 8,
+  minHeight: BTN_H, // reserve space so layout doesn't jump
+};
+
+const BTN: React.CSSProperties = {
+  width: BTN_W,
+  height: BTN_H,
+  background: "#2a2a2a",
+  color: "#ddd",
+  border: "1px solid #3a3a3a",
+  borderRadius: 6,
+  cursor: "pointer",
+};
+
+const BTN_ACTIVE: React.CSSProperties = {
+  ...BTN,
+  background: "#3a3a3a",
+  borderColor: "#5a5a5a",
+};
+
+const BTN_PRIMARY: React.CSSProperties = {
+  ...BTN,
+  background: "#2f4cff",    // subtle blue, not “success” green
+  borderColor: "#3b57ff",
+  color: "#fff",
+};
 
 function dirToAngle(dir: AllDir) {
   switch (dir) {
@@ -80,7 +129,6 @@ export function BoardView() {
     actCombine,
     actRotateArrow,
     actScatter,
-    // endTurn removed (was unused)
   } = useGame();
 
   const [hover, setHover] = useState<Coord | null>(null);
@@ -205,19 +253,17 @@ export function BoardView() {
     setPreviewDir((prev) => prev ? nextCW(prev) : cur ? nextCW(cur) : "N");
   }
 
-function confirmRotation() {
-  if (!selected || !selectedIsKing || !previewDir) {
+  function confirmRotation() {
+    if (!selected || !selectedIsKing || !previewDir) {
+      setRotateMode(false);
+      setPreviewDir(null);
+      return;
+    }
+    // Absolute set to previewDir; server/store decides turn consumption
+    actRotateArrow(selected, previewDir as any);
     setRotateMode(false);
     setPreviewDir(null);
-    return;
   }
-  // Set the arrow directly to the previewDir (absolute), not step-by-step
-  // Store API accepts "cw" | "ccw" | Dir, so pass the Dir:
-  actRotateArrow(selected, previewDir as any);
-
-  setRotateMode(false);
-  setPreviewDir(null);
-}
 
   function cancelRotation() {
     setRotateMode(false);
@@ -391,6 +437,141 @@ function confirmRotation() {
               <strong>{selected ? fullValueAt(board, selected) : "-"}</strong>
             </div>
 
+            {/* === Action Toolbar (directly under header/value) ======================= */}
+            {selectedIsKing && (
+              <div
+                style={{
+                  marginTop: 8,
+                  marginBottom: 12,
+                  display: "flex",
+                  gap: 10,
+                  flexWrap: "wrap",
+                }}
+              >
+                {/* ── ROTATE group ─────────────────────────────────────────────────────── */}
+                {canOrientNow && (
+                  <div style={GROUP_STYLE}>
+                    <div style={ROW_STYLE}>
+                      <button
+                        style={rotateMode ? BTN_ACTIVE : BTN}
+                        onClick={() => {
+                          const cur = (selectedPiece as any)?.arrowDir as AllDir | null;
+                          if (!rotateMode) {
+                            setRotateMode(true);
+                            setPreviewDir(cur ? nextCW(cur) : "N");
+                          } else {
+                            setRotateMode(false);
+                            setPreviewDir(null);
+                          }
+                        }}
+                      >
+                        Rotate
+                      </button>
+                    </div>
+                    <div style={SLOT_STYLE}>
+                      {rotateMode ? (
+                        <>
+                          <button style={BTN} onClick={cycleCW}>Cycle</button>
+                          <button
+                            style={BTN}
+                            onClick={() => {
+                              setRotateMode(false);
+                              setPreviewDir(null);
+                            }}
+                          >
+                            Cancel
+                          </button>
+                          <button style={BTN_PRIMARY} onClick={confirmRotation}>
+                            Confirm
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button style={{ ...BTN, visibility: "hidden" }}>Cycle</button>
+                          <button style={{ ...BTN, visibility: "hidden" }}>Cancel</button>
+                          <button style={{ ...BTN_PRIMARY, visibility: "hidden" }}>Confirm</button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* ── SCATTER group ───────────────────────────────────────────────────── */}
+                <div style={GROUP_STYLE}>
+                  <div style={ROW_STYLE}>
+                    <button
+                      style={scatterMode ? BTN_ACTIVE : BTN}
+                      onClick={() => {
+                        if (!scatterMode) {
+                          if (!selected) return;
+                          setScatterMode(true);
+                          setScatterBase(selected);
+                        } else {
+                          setScatterMode(false);
+                          setScatterBase(null);
+                        }
+                      }}
+                    >
+                      Scatter
+                    </button>
+                  </div>
+                  <div style={SLOT_STYLE}>
+                    {scatterMode ? (
+                      <>
+                        <button
+                          style={BTN}
+                          onClick={() => {
+                            setScatterMode(false);
+                            setScatterBase(null);
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          style={
+                            scatterInfo?.can
+                              ? BTN_PRIMARY
+                              : { ...BTN_PRIMARY, opacity: 0.6, cursor: "not-allowed" }
+                          }
+                          disabled={!scatterInfo?.can}
+                          onClick={() => {
+                            if (!selected || !scatterInfo) return;
+                            const owner = ownerOf(pieceAt(board, selected)!);
+                            setAnim({
+                              kind: "scatter",
+                              from: selected,
+                              l1: scatterInfo.l1,
+                              l2: scatterInfo.l2,
+                              owner,
+                            });
+                            setAnimGo(false);
+                            requestAnimationFrame(() =>
+                              requestAnimationFrame(() => setAnimGo(true))
+                            );
+                            if (animTimer.current) window.clearTimeout(animTimer.current);
+                            animTimer.current = window.setTimeout(() => {
+                              actScatter(selected, scatterInfo.l1, scatterInfo.l2);
+                              setAnim(null);
+                              setScatterMode(false);
+                              setScatterBase(null);
+                            }, 200);
+                          }}
+                        >
+                          Confirm
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button style={{ ...BTN, visibility: "hidden" }}>Cancel</button>
+                        <button style={{ ...BTN_PRIMARY, visibility: "hidden" }}>Confirm</button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Help text follows */}
             <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.35 }}>
               {helpLines.map((t, i) => (
                 <div key={i} style={{ marginBottom: 6 }}>
@@ -398,120 +579,6 @@ function confirmRotation() {
                 </div>
               ))}
             </div>
-
-            {/* Rotate buffered controls */}
-{selectedIsKing && canOrientNow && (
-  <div
-    style={{
-      marginTop: 12,
-      display: "flex",
-      flexDirection: "column",
-      gap: 6,
-    }}
-  >
-    {!rotateMode ? (
-      <button
-        style={{ width: BTN_W }}
-        onClick={() => {
-          const cur = (selectedPiece as any)?.arrowDir as AllDir | null;
-          setRotateMode(true);
-          setPreviewDir(cur ? nextCW(cur) : "N");
-        }}
-      >
-        Rotate
-      </button>
-    ) : (
-      <>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button style={{ width: BTN_W }} onClick={cycleCW}>
-            Rotate
-          </button>
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button style={{ width: BTN_W }} onClick={cancelRotation}>
-            Cancel Rotation
-          </button>
-          <button
-            className="primary"
-            style={{ width: BTN_W }}
-            onClick={confirmRotation}
-          >
-            Confirm Rotation
-          </button>
-        </div>
-      </>
-    )}
-  </div>
-)}
-
-
-            {/* Scatter controls */}
-{selectedIsKing && (
-  <div
-    style={{
-      marginTop: 12,
-      display: "flex",
-      flexDirection: "column",
-      gap: 6,
-    }}
-  >
-    {!scatterMode ? (
-      <button
-        className="primary"
-        style={{ width: BTN_W }}
-        onClick={() => {
-          if (!selected) return;
-          setScatterMode(true);
-          setScatterBase(selected);
-        }}
-      >
-        Scatter
-      </button>
-    ) : (
-      <>
-        <button
-          style={{ width: BTN_W }}
-          onClick={() => {
-            setScatterMode(false);
-            setScatterBase(null);
-          }}
-        >
-          Cancel Scatter
-        </button>
-        <button
-          className="primary"
-          style={{ width: BTN_W }}
-          disabled={!scatterInfo?.can}
-          onClick={() => {
-            if (!selected || !scatterInfo) return;
-            const owner = ownerOf(pieceAt(board, selected)!);
-            setAnim({
-              kind: "scatter",
-              from: selected,
-              l1: scatterInfo.l1,
-              l2: scatterInfo.l2,
-              owner,
-            });
-            setAnimGo(false);
-            requestAnimationFrame(() =>
-              requestAnimationFrame(() => setAnimGo(true))
-            );
-            if (animTimer.current) window.clearTimeout(animTimer.current);
-            animTimer.current = window.setTimeout(() => {
-              actScatter(selected, scatterInfo.l1, scatterInfo.l2);
-              setAnim(null);
-              setScatterMode(false);
-              setScatterBase(null);
-            }, 200);
-          }}
-        >
-          Confirm Scatter
-        </button>
-      </>
-    )}
-  </div>
-)}
-
           </>
         ) : (
           <>
