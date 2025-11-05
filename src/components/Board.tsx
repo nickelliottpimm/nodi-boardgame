@@ -79,12 +79,10 @@ function dirToAngle(dir: AllDir) {
     case "NW": return 315;
   }
 }
-
 function nextCW(d: AllDir): AllDir {
   const i = DIR_ORDER.indexOf(d);
   return DIR_ORDER[(i + 1) % 8];
 }
-
 function coordEq(a: Coord, b: Coord) {
   return a.r === b.r && a.c === b.c;
 }
@@ -124,26 +122,20 @@ function enumerateMoves(board: Board, side: Player): AIMove[] {
       const p = pieceAt(board, pos);
       if (!p || ownerOf(p) !== side) continue;
       const lm = legalMovesFor(board, pos);
-      // combines
       for (const to of lm.combines) {
-        // small bias for making a king oriented towards target square
-        const score = 20;
-        out.push({ kind: "combine", from: pos, to, score });
+        out.push({ kind: "combine", from: pos, to, score: 20 });
       }
-      // captures
       for (const to of lm.captures) {
         const tgt = pieceAt(board, to);
-        // prefer capturing keys, then higher value targets
         const keyBonus = tgt && isKeyPiece(tgt) ? 300 : 0;
         const valBonus = 10 * (tgt ? valueAt(board, to) : 0);
         const centerBonus = 2 * (3 - Math.abs(3.5 - to.r)) + 2 * (3 - Math.abs(3.5 - to.c));
         out.push({ kind: "move", from: pos, to, capture: true, score: 150 + keyBonus + valBonus + centerBonus });
       }
-      // quiet moves
       for (const to of lm.moves) {
         const vTo = valueAt(board, to);
         const centerBonus = 2 * (3 - Math.abs(3.5 - to.r)) + 2 * (3 - Math.abs(3.5 - to.c));
-        const rayBonus = isKing(p) ? 5 : 0; // gentle bias for king positioning
+        const rayBonus = isKing(p) ? 5 : 0;
         out.push({ kind: "move", from: pos, to, score: 5 + 3 * vTo + centerBonus + rayBonus });
       }
     }
@@ -171,20 +163,20 @@ export function BoardView() {
   const [hover, setHover] = useState<Coord | null>(null);
   const [showHelp, setShowHelp] = useState(true);
 
-  // Scatter UI state
+  // Scatter UI
   const [scatterMode, setScatterMode] = useState(false);
   const [scatterBase, setScatterBase] = useState<Coord | null>(null);
 
-  // Rotate UI state (preview)
+  // Rotate UI
   const [rotateMode, setRotateMode] = useState(false);
   const [previewDir, setPreviewDir] = useState<AllDir | null>(null);
 
-  // Animation state
+  // Anim
   const [anim, setAnim] = useState<AnimState>(null);
   const [animGo, setAnimGo] = useState(false);
   const animTimer = useRef<number | null>(null);
 
-  // Legal moves (disabled while in buffering modes)
+  // Legal
   const legal = useMemo(() => {
     if (!selected || scatterMode || rotateMode) {
       return { moves: [] as Coord[], combines: [] as Coord[], captures: [] as Coord[] };
@@ -196,7 +188,7 @@ export function BoardView() {
   const selectedIsKing = !!(selectedPiece && isKing(selectedPiece));
   const canOrientNow = selected ? valueAt(board, selected) >= 2 && selectedIsKing : false;
 
-  // Rays from all kings (include origin)
+  // Rays
   const rayLines = useMemo(() => {
     const lines: { path: Coord[]; selected: boolean }[] = [];
     for (let r = 0; r < 8; r++) {
@@ -213,44 +205,37 @@ export function BoardView() {
     return lines;
   }, [board, selected]);
 
-  // Hovered numeric value
+  // Hover value
   const hoverValue = useMemo(() => {
     if (!hover) return null;
     return fullValueAt(board, hover);
   }, [board, hover]);
 
-  // --- AI turn loop (simple heuristic) ------------------------------------
+  // AI loop
   useEffect(() => {
     if (winner) return;
     if (gameMode !== "vsAI") return;
     if (turn !== aiColor) return;
     if (rotateMode || scatterMode) return;
 
-    // tiny delay for UX
     const t = setTimeout(() => {
       const moves = enumerateMoves(board, aiColor);
-      if (!moves.length) return; // stalemate-ish; do nothing
-
-      // pick the highest score; stable tie-break by array order
+      if (!moves.length) return;
       let best = moves[0];
       for (let i = 1; i < moves.length; i++) {
         if (moves[i].score > best.score) best = moves[i];
       }
-
-      if (best.kind === "combine") {
-        actCombine(best.from, best.to);
-      } else {
-        actMove(best.from, best.to, !!best.capture);
-      }
+      if (best.kind === "combine") actCombine(best.from, best.to);
+      else actMove(best.from, best.to, !!best.capture);
     }, 180);
 
     return () => clearTimeout(t);
   }, [board, turn, winner, gameMode, aiColor, rotateMode, scatterMode, actMove, actCombine]);
 
-  // Click a square (and pieces call this too)
+  // Click square
   function onSquareClick(r: number, c: number) {
     if (winner) return;
-    if (gameMode === "vsAI" && turn === aiColor) return; // block human during AI turn
+    if (gameMode === "vsAI" && turn === aiColor) return;
 
     const pos = { r, c };
 
@@ -266,7 +251,7 @@ export function BoardView() {
       return;
     }
 
-    if (rotateMode) return; // in rotate preview, only toolbar confirms/cancels
+    if (rotateMode) return;
 
     if (!selected) {
       const p = pieceAt(board, pos);
@@ -294,49 +279,38 @@ export function BoardView() {
       return;
     }
 
-    // Reselect same-side piece
     const p2 = pieceAt(board, pos);
     if (p2 && ownerOf(p2) === turn) {
       select(pos);
       return;
     }
 
-    // Deselect
     select(null as any);
   }
 
-  // Orientation via dots: set buffer preview
-  function handleOrient(dir: AllDir) {
-    if (!selected || !selectedIsKing) return;
-    setRotateMode(true);
-    setPreviewDir(dir);
-  }
-
-  // Rotate button / 'R' hotkey: advance preview CW
+  // Rotate helpers
   function cycleCW() {
     if (!selected || !selectedIsKing) return;
     const cur = (selectedPiece as any)?.arrowDir as AllDir | null;
     setRotateMode(true);
     setPreviewDir((prev) => (prev ? nextCW(prev) : cur ? nextCW(cur) : "N"));
   }
-
   function confirmRotation() {
     if (!selected || !selectedIsKing || !previewDir) {
       setRotateMode(false);
       setPreviewDir(null);
       return;
     }
-    actRotateArrow(selected, previewDir as any); // store decides if turn is consumed
+    actRotateArrow(selected, previewDir as any);
     setRotateMode(false);
     setPreviewDir(null);
   }
-
   function cancelRotation() {
     setRotateMode(false);
     setPreviewDir(null);
   }
 
-  // Scatter info for highlight
+  // Scatter info
   const scatterInfo = useMemo(() => {
     if (!selected || !scatterMode) return null;
     const p = pieceAt(board, selected);
@@ -421,7 +395,7 @@ export function BoardView() {
     };
   }
 
-  // Help lines
+  // Help text
   const helpLines = useMemo(() => {
     const out: string[] = [];
     const sel = selected;
@@ -449,7 +423,7 @@ export function BoardView() {
     return out;
   }, [board, selected, selectedPiece, selectedIsKing]);
 
-  // All destinations to paint
+  // All destinations
   const allDestinations = useMemo(() => {
     if (!selected || scatterMode || rotateMode) return [] as Coord[];
     const list = [...legal.moves, ...legal.combines, ...legal.captures];
@@ -467,33 +441,32 @@ export function BoardView() {
       className="board-shell"
       style={{
         position: "relative",
-        paddingLeft: 300, // 260 panel + 40px gap
+        paddingLeft: 300,
         display: "block",
       }}
     >
       {/* Left info panel */}
       <div
-  className="side-help"
-  style={{
-    position: "absolute",
-    left: 0,
-    top: 0,
-    width: 260,
-    padding: "10px 12px",
-    background: "#1d1d1d",
-    border: "1px solid #2c2c2c",
-    borderRadius: 8,
-    color: "#ddd",
-    height: SQUARE * 8,
-    overflowY: "auto",
-    overflowX: "hidden",   // ← add this line
-    opacity: showHelp ? 1 : 0,
-    pointerEvents: showHelp ? "auto" : "none",
-    transition: "opacity 120ms ease",
-    marginRight: 40,
-  }}
->
-
+        className="side-help"
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          width: 260,
+          padding: "10px 12px",
+          background: "#1d1d1d",
+          border: "1px solid #2c2c2c",
+          borderRadius: 8,
+          color: "#ddd",
+          height: SQUARE * 8,
+          overflowY: "auto",
+          overflowX: "hidden",
+          opacity: showHelp ? 1 : 0,
+          pointerEvents: showHelp ? "auto" : "none",
+          transition: "opacity 120ms ease",
+          marginRight: 40,
+        }}
+      >
         {/* Winner banner */}
         {winner && (
           <div
@@ -511,73 +484,70 @@ export function BoardView() {
         )}
 
         {/* Mode & AI controls (stacked; no horizontal growth) */}
-<div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
-  {/* Row 1: Mode toggle */}
-  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-    <button
-      style={{
-        padding: "6px 10px",
-        width: "100%",
-        borderRadius: 6,
-        border: "1px solid #333",
-        background: gameMode === "hotseat" ? "#3a3a3a" : "#262626",
-        color: "#ddd",
-      }}
-      onClick={() => setGameMode("hotseat")}
-    >
-      Hotseat
-    </button>
-    <button
-      style={{
-        padding: "6px 10px",
-        width: "100%",
-        borderRadius: 6,
-        border: "1px solid #333",
-        background: gameMode === "vsAI" ? "#3a3a3a" : "#262626",
-        color: "#ddd",
-      }}
-      onClick={() => setGameMode("vsAI")}
-    >
-      vs AI
-    </button>
-  </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+            <button
+              style={{
+                padding: "6px 10px",
+                width: "100%",
+                borderRadius: 6,
+                border: "1px solid #333",
+                background: gameMode === "hotseat" ? "#3a3a3a" : "#262626",
+                color: "#ddd",
+              }}
+              onClick={() => setGameMode("hotseat")}
+            >
+              Hotseat
+            </button>
+            <button
+              style={{
+                padding: "6px 10px",
+                width: "100%",
+                borderRadius: 6,
+                border: "1px solid #333",
+                background: gameMode === "vsAI" ? "#3a3a3a" : "#262626",
+                color: "#ddd",
+              }}
+              onClick={() => setGameMode("vsAI")}
+            >
+              vs AI
+            </button>
+          </div>
 
-  {/* Row 2: AI side (only when vs AI) */}
-  {gameMode === "vsAI" && (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <span style={{ fontSize: 11, opacity: 0.75 }}>AI plays</span>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-        <button
-          style={{
-            padding: "6px 10px",
-            width: "100%",
-            borderRadius: 6,
-            border: "1px solid #333",
-            background: aiColor === "Black" ? "#3a3a3a" : "#262626",
-            color: "#ddd",
-          }}
-          onClick={() => setAIColor("Black")}
-        >
-          Black
-        </button>
-        <button
-          style={{
-            padding: "6px 10px",
-            width: "100%",
-            borderRadius: 6,
-            border: "1px solid #333",
-            background: aiColor === "White" ? "#3a3a3a" : "#262626",
-            color: "#ddd",
-          }}
-          onClick={() => setAIColor("White")}
-        >
-          White
-        </button>
-      </div>
-    </div>
-  )}
-</div>
-
+          {gameMode === "vsAI" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontSize: 11, opacity: 0.75 }}>AI plays</span>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                <button
+                  style={{
+                    padding: "6px 10px",
+                    width: "100%",
+                    borderRadius: 6,
+                    border: "1px solid #333",
+                    background: aiColor === "Black" ? "#3a3a3a" : "#262626",
+                    color: "#ddd",
+                  }}
+                  onClick={() => setAIColor("Black")}
+                >
+                  Black
+                </button>
+                <button
+                  style={{
+                    padding: "6px 10px",
+                    width: "100%",
+                    borderRadius: 6,
+                    border: "1px solid #333",
+                    background: aiColor === "White" ? "#3a3a3a" : "#262626",
+                    color: "#ddd",
+                  }}
+                  onClick={() => setAIColor("White")}
+                >
+                  White
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
 
         {selectedPiece ? (
           <>
@@ -635,9 +605,7 @@ export function BoardView() {
                     <div style={SLOT_STYLE}>
                       {rotateMode ? (
                         <>
-                          <button style={BTN} onClick={cycleCW}>
-                            Cycle
-                          </button>
+                          <button style={BTN} onClick={cycleCW}>Cycle</button>
                           <button
                             style={BTN}
                             onClick={() => {
@@ -653,15 +621,9 @@ export function BoardView() {
                         </>
                       ) : (
                         <>
-                          <button style={{ ...BTN, visibility: "hidden" }}>
-                            Cycle
-                          </button>
-                          <button style={{ ...BTN, visibility: "hidden" }}>
-                            Cancel
-                          </button>
-                          <button style={{ ...BTN_PRIMARY, visibility: "hidden" }}>
-                            Confirm
-                          </button>
+                          <button style={{ ...BTN, visibility: "hidden" }}>Cycle</button>
+                          <button style={{ ...BTN, visibility: "hidden" }}>Cancel</button>
+                          <button style={{ ...BTN_PRIMARY, visibility: "hidden" }}>Confirm</button>
                         </>
                       )}
                     </div>

@@ -57,7 +57,6 @@ function winnerAfter(board: Board, mover: Player): Player | null {
 }
 
 type AllDir = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
-const DIR_ORDER: AllDir[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 type RotateArg = "CW" | "CCW" | AllDir;
 
 type GameState = {
