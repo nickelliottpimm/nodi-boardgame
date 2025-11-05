@@ -1,13 +1,7 @@
-// src/store/gameStore.ts
 import { create } from "zustand";
-import type { Board, Coord, Player, Dir } from "../game/rules";
-import {
-  pieceAt,
-  isKing,
-  ownerOf,
-  valueAt,
-  isKeyPiece,
-} from "../game/rules";
+import type { Board, Player } from "../game/rules";
+import { pieceAt, isKing, ownerOf, valueAt, isKeyPiece } from "../game/rules";
+import type { Coord } from "../game/types";
 import { initialBoard } from "../game/setupBoard";
 import { generateKingArrowMoves } from "../game/moveGen";
 
@@ -21,35 +15,12 @@ type Snapshot = {
   turn: Player;
 };
 
-type GameState = {
-  board: Board;
-  turn: Player;
-  selected: Coord | null;
-  highlights: Highlight[];
-
-  // history for undo/reset
-  history: Snapshot[];
-  canUndo: boolean;
-  undo: () => void;
-  reset: () => void;
-
-  // selection & actions
-  select: (pos: Coord | null) => void;
-  actMove: (from: Coord, to: Coord, isCapture?: boolean) => void;
-  actCombine: (from: Coord, onto: Coord) => void;
-  actScatter: (from: Coord, l1: Coord, l2: Coord) => void;
-
-  // NEW: rotation + explicit endTurn
-  actRotateArrow: (at: Coord, dir: "cw" | "ccw") => void;
-  endTurn: () => void;
-};
+type GameMode = "hotseat" | "vsAI";
 
 function cloneBoard(b: Board): Board {
-  return b.map(row =>
-    row.map(cell =>
-      cell
-        ? { counters: [...cell.counters], arrowDir: cell.arrowDir }
-        : null
+  return b.map((row) =>
+    row.map((cell) =>
+      cell ? { counters: [...cell.counters], arrowDir: cell.arrowDir } : null
     )
   );
 }
@@ -64,13 +35,70 @@ const ADJ: [number, number][] = [
   [ 1, -1], [ 1, 0], [ 1, 1],
 ];
 
+function other(p: Player): Player {
+  return p === "Black" ? "White" : "Black";
+}
+
+function keysRemaining(board: Board, side: Player): number {
+  let n = 0;
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = pieceAt(board, { r, c });
+      if (!p) continue;
+      if (ownerOf(p) === side && isKeyPiece(p)) n++;
+    }
+  }
+  return n;
+}
+
+function winnerAfter(board: Board, mover: Player): Player | null {
+  const opp = other(mover);
+  return keysRemaining(board, opp) === 0 ? mover : null;
+}
+
+type AllDir = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
+const DIR_ORDER: AllDir[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+type RotateArg = "CW" | "CCW" | AllDir;
+
+type GameState = {
+  board: Board;
+  turn: Player;
+  selected: Coord | null;
+  highlights: Highlight[];
+  winner: Player | null;
+
+  history: Snapshot[];
+  canUndo: boolean;
+
+  gameMode: GameMode;
+  aiColor: Player;
+  setGameMode: (mode: GameMode) => void;
+  setAIColor: (side: Player) => void;
+
+  undo: () => void;
+  reset: () => void;
+
+  select: (pos: Coord | null) => void;
+  actMove: (from: Coord, to: Coord, isCapture?: boolean) => void;
+  actCombine: (from: Coord, onto: Coord) => void;
+  actScatter: (from: Coord, l1: Coord, l2: Coord) => void;
+  actRotateArrow: (at: Coord, dir: RotateArg) => void;
+};
+
 export const useGame = create<GameState>((set, get) => ({
   board: initialBoard(),
-  turn: "Black", // Black starts
+  turn: "Black",
   selected: null,
   highlights: [],
+  winner: null,
+
   history: [],
   canUndo: false,
+
+  gameMode: "hotseat",
+  aiColor: "White",
+  setGameMode: (mode) => set({ gameMode: mode }),
+  setAIColor: (side) => set({ aiColor: side }),
 
   undo: () => {
     const { history } = get();
@@ -84,6 +112,7 @@ export const useGame = create<GameState>((set, get) => ({
       highlights: [],
       history: rest,
       canUndo: rest.length > 0,
+      winner: null,
     });
   },
 
@@ -95,21 +124,14 @@ export const useGame = create<GameState>((set, get) => ({
       highlights: [],
       history: [],
       canUndo: false,
+      winner: null,
     });
   },
 
-  endTurn: () => {
-    set(state => ({
-      turn: state.turn === "Black" ? "White" : "Black",
-      selected: null,
-      highlights: [],
-    }));
-  },
-
   select: (pos) => {
-    const { board, turn } = get();
+    const { board, turn, winner } = get();
+    if (winner) return;
 
-    // deselect
     if (!pos) {
       set({ selected: null, highlights: [] });
       return;
@@ -124,7 +146,6 @@ export const useGame = create<GameState>((set, get) => ({
     const val = valueAt(board, pos);
     const hs: Highlight[] = [];
 
-    // 1-step moves / captures / combines (val >= 1)
     if (val >= 1) {
       for (const [dr, dc] of ADJ) {
         const r = pos.r + dr, c = pos.c + dc;
@@ -136,19 +157,16 @@ export const useGame = create<GameState>((set, get) => ({
         } else {
           const tOwner = ownerOf(t);
           if (tOwner === turn) {
-            // combines only if both are singles and NOT keys
             if (!isKing(me) && !isKeyPiece(me) && !isKing(t) && !isKeyPiece(t)) {
               hs.push({ type: "combine", to: tPos });
             }
           } else {
-            // capture candidate; value gate applied on commit
             hs.push({ type: "capture", to: tPos });
           }
         }
       }
     }
 
-    // king arrow-directed moves (V2 2-step, V3+ slide)
     if (isKing(me) && me.arrowDir) {
       const arrowHs = generateKingArrowMoves(board, pos, me, val, turn);
       for (const a of arrowHs) hs.push({ type: a.type, to: a.to });
@@ -158,149 +176,123 @@ export const useGame = create<GameState>((set, get) => ({
   },
 
   actMove: (from, to, isCapture = false) => {
-    const { board, turn, history, endTurn } = get();
+    const { board, turn, history } = get();
     const p = pieceAt(board, from);
     if (!p) return;
 
     const next = cloneBoard(board);
-
-    // capture if flagged
     if (isCapture) next[to.r][to.c] = null;
-
-    // move piece
     next[to.r][to.c] = p;
     next[from.r][from.c] = null;
 
-    // push snapshot; apply board; then endTurn()
     const snap: Snapshot = { board: cloneBoard(board), turn };
+    const maybeWinner = winnerAfter(next, turn);
+
     set({
       board: next,
+      turn: maybeWinner ? turn : other(turn),
+      selected: null,
+      highlights: [],
       history: [...history, snap],
       canUndo: true,
+      winner: maybeWinner,
     });
-    endTurn();
   },
 
   actCombine: (from, onto) => {
-    const { board, turn, history, endTurn } = get();
+    const { board, turn, history } = get();
     const a = pieceAt(board, from);
     const b = pieceAt(board, onto);
     if (!a || !b) return;
-
-    // must be friendly singles and NOT keys
     if (isKing(a) || isKing(b) || isKeyPiece(a) || isKeyPiece(b)) return;
     if (ownerOf(a) !== ownerOf(b)) return;
 
-    // Arrow = direction of the move (from -> onto)
     const dr = Math.sign(onto.r - from.r);
     const dc = Math.sign(onto.c - from.c);
-    const DIR_FROM_DELTA: Record<string, Dir> = {
+    const DIR_FROM_DELTA: Record<string, AllDir> = {
       "-1,0": "N", "-1,1": "NE", "0,1": "E", "1,1": "SE",
       "1,0": "S", "1,-1": "SW", "0,-1": "W", "-1,-1": "NW",
     };
     const arrowDir = DIR_FROM_DELTA[`${dr},${dc}`];
 
     const next = cloneBoard(board);
-    // create king on 'onto'
     next[onto.r][onto.c] = {
       counters: [...b.counters, ...a.counters],
       arrowDir,
     };
-    // clear 'from'
     next[from.r][from.c] = null;
 
     const snap: Snapshot = { board: cloneBoard(board), turn };
     set({
       board: next,
+      turn: other(turn),
+      selected: null,
+      highlights: [],
       history: [...history, snap],
       canUndo: true,
     });
-    endTurn();
   },
 
   actScatter: (from, l1, l2) => {
-    const { board, turn, history, endTurn } = get();
+    const { board, turn, history } = get();
     const me = pieceAt(board, from);
     if (!me || !isKing(me)) return;
 
     const next = cloneBoard(board);
 
-    // Remove any enemies on l1/l2 (scatter capture)
     const t1 = pieceAt(next, l1);
     const t2 = pieceAt(next, l2);
     if (t1 && ownerOf(t1) !== ownerOf(me)) next[l1.r][l1.c] = null;
     if (t2 && ownerOf(t2) !== ownerOf(me)) next[l2.r][l2.c] = null;
 
-    // Remove the king
     next[from.r][from.c] = null;
 
-    // Place two singles with same owner as the king on l1/l2
     const owner = ownerOf(me);
     next[l1.r][l1.c] = { counters: [{ owner }] };
     next[l2.r][l2.c] = { counters: [{ owner }] };
 
     const snap: Snapshot = { board: cloneBoard(board), turn };
+    const maybeWinner = winnerAfter(next, turn);
+
     set({
       board: next,
+      turn: maybeWinner ? turn : other(turn),
+      selected: null,
+      highlights: [],
+      history: [...history, snap],
+      canUndo: true,
+      winner: maybeWinner,
+    });
+  },
+
+  actRotateArrow: (at, dir) => {
+    const { board, turn, history } = get();
+    const p = pieceAt(board, at);
+    if (!p || !isKing(p) || !p.arrowDir) return;
+
+    const DIR_ORDER: AllDir[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+    const idx = DIR_ORDER.indexOf(p.arrowDir);
+
+    let nextDir: AllDir;
+    if (dir === "CW") nextDir = DIR_ORDER[(idx + 1) % 8];
+    else if (dir === "CCW") nextDir = DIR_ORDER[(idx + 7) % 8];
+    else nextDir = dir;
+
+    const next = cloneBoard(board);
+    const np = next[at.r][at.c];
+    if (!np) return;
+    np.arrowDir = nextDir;
+
+    const free = valueAt(next, at) >= 3;
+    const snap: Snapshot = { board: cloneBoard(board), turn };
+
+    set({
+      board: next,
+      turn: free ? turn : other(turn),
+      selected: { ...at },
+      highlights: [],
       history: [...history, snap],
       canUndo: true,
     });
-    endTurn();
   },
-
-actRotateArrow: (at, dir) => {
-  const { board, turn, history, endTurn } = get();
-  const p = pieceAt(board, at);
-  if (!p || !isKing(p) || !p.arrowDir) return;
-  if (ownerOf(p) !== turn) return;
-
-  // Value before rotation
-  const beforeVal = valueAt(board, at); // 0..3 (3 represents 3+ ability)
-
-  // Snapshot for undo
-  const snap: Snapshot = { board: cloneBoard(board), turn };
-
-  // Clone, then apply rotation
-  const next = cloneBoard(board);
-  const target = pieceAt(next, at);
-  if (!target || !isKing(target) || !target.arrowDir) return;
-
-  const DIR_ORDER: Dir[] = ["N","NE","E","SE","S","SW","W","NW"];
-  const idx = DIR_ORDER.indexOf(target.arrowDir);
-
-  let newDir: Dir;
-  if (dir === "cw" || dir === "ccw") {
-    const nextIdx = dir === "cw"
-      ? (idx + 1) % DIR_ORDER.length
-      : (idx + DIR_ORDER.length - 1) % DIR_ORDER.length;
-    newDir = DIR_ORDER[nextIdx];
-  } else {
-    // dir is a Dir (absolute set)
-    newDir = dir as Dir;
-  }
-  target.arrowDir = newDir;
-
-  // Commit board & history
-  set({
-    board: next,
-    history: [...history, snap],
-    canUndo: true,
-    // keep selection so the UI still shows the same piece highlighted after rotation
-    selected: at,
-  });
-
-  // Recompute value after rotation with new ray directions applied
-  const afterVal = valueAt(next, at);
-
-  // Free rotation rule: if piece is 3+ either BEFORE or AFTER, do not consume turn
-  const isFree = beforeVal >= 3 || afterVal >= 3;
-
-  if (!isFree) {
-    endTurn();
-  } else {
-    // stay on same turn and clear any temporary highlights
-    set({ highlights: [] });
-  }
-},
-
 }));

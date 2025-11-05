@@ -1,6 +1,5 @@
 // src/components/Board.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
-import type React from "react";
 import cn from "classnames";
 import { SQUARE, DIRS } from "../game/types";
 import type { Coord } from "../game/types";
@@ -22,8 +21,8 @@ import { useGame } from "../store/gameStore";
 type AllDir = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
 const DIR_ORDER: AllDir[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 
-// ── Toolbar styles ────────────────────────────────────────────────────────────
-const BTN_W = 120;     // px — adjust if you want wider buttons
+// Toolbar styles
+const BTN_W = 120;
 const BTN_H = 34;
 
 const GROUP_STYLE: React.CSSProperties = {
@@ -36,20 +35,17 @@ const GROUP_STYLE: React.CSSProperties = {
   background: "#161616",
   minWidth: 160,
 };
-
 const ROW_STYLE: React.CSSProperties = {
   display: "flex",
   gap: 8,
   alignItems: "center",
-  minHeight: BTN_H, // keep row height stable
+  minHeight: BTN_H,
 };
-
 const SLOT_STYLE: React.CSSProperties = {
   display: "flex",
   gap: 8,
-  minHeight: BTN_H, // reserve space so layout doesn't jump
+  minHeight: BTN_H,
 };
-
 const BTN: React.CSSProperties = {
   width: BTN_W,
   height: BTN_H,
@@ -59,16 +55,14 @@ const BTN: React.CSSProperties = {
   borderRadius: 6,
   cursor: "pointer",
 };
-
 const BTN_ACTIVE: React.CSSProperties = {
   ...BTN,
   background: "#3a3a3a",
   borderColor: "#5a5a5a",
 };
-
 const BTN_PRIMARY: React.CSSProperties = {
   ...BTN,
-  background: "#2f4cff",    // subtle blue, not “success” green
+  background: "#2f4cff",
   borderColor: "#3b57ff",
   color: "#fff",
 };
@@ -100,7 +94,6 @@ type AnimState =
   | { kind: "move"; from: Coord; to: Coord; owner: Player }
   | { kind: "scatter"; from: Coord; l1: Coord; l2: Coord; owner: Player };
 
-/** FULL numeric value (counters ± rays). Self-rays do NOT count. */
 function fullValueAt(board: Board, pos: Coord): number {
   const p = pieceAt(board, pos);
   if (!p) return 0;
@@ -110,13 +103,52 @@ function fullValueAt(board: Board, pos: Coord): number {
       const qPos = { r, c };
       const q = pieceAt(board, qPos);
       if (!q || !isKing(q) || !q.arrowDir) continue;
-      // IMPORTANT: for value math, use ray WITHOUT origin (no self-boost)
       const ray = getRayForKing(board, qPos);
       const hits = ray.some((s) => s.r === pos.r && s.c === pos.c);
       if (hits) total += ownerOf(q) === ownerOf(p) ? 1 : -1;
     }
   }
   return total;
+}
+
+/** --- very simple built-in AI ------------------------------------------- **/
+type AIMove =
+  | { kind: "combine"; from: Coord; to: Coord; score: number }
+  | { kind: "move"; from: Coord; to: Coord; score: number; capture?: boolean };
+
+function enumerateMoves(board: Board, side: Player): AIMove[] {
+  const out: AIMove[] = [];
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const pos = { r, c };
+      const p = pieceAt(board, pos);
+      if (!p || ownerOf(p) !== side) continue;
+      const lm = legalMovesFor(board, pos);
+      // combines
+      for (const to of lm.combines) {
+        // small bias for making a king oriented towards target square
+        const score = 20;
+        out.push({ kind: "combine", from: pos, to, score });
+      }
+      // captures
+      for (const to of lm.captures) {
+        const tgt = pieceAt(board, to);
+        // prefer capturing keys, then higher value targets
+        const keyBonus = tgt && isKeyPiece(tgt) ? 300 : 0;
+        const valBonus = 10 * (tgt ? valueAt(board, to) : 0);
+        const centerBonus = 2 * (3 - Math.abs(3.5 - to.r)) + 2 * (3 - Math.abs(3.5 - to.c));
+        out.push({ kind: "move", from: pos, to, capture: true, score: 150 + keyBonus + valBonus + centerBonus });
+      }
+      // quiet moves
+      for (const to of lm.moves) {
+        const vTo = valueAt(board, to);
+        const centerBonus = 2 * (3 - Math.abs(3.5 - to.r)) + 2 * (3 - Math.abs(3.5 - to.c));
+        const rayBonus = isKing(p) ? 5 : 0; // gentle bias for king positioning
+        out.push({ kind: "move", from: pos, to, score: 5 + 3 * vTo + centerBonus + rayBonus });
+      }
+    }
+  }
+  return out;
 }
 
 export function BoardView() {
@@ -129,6 +161,11 @@ export function BoardView() {
     actCombine,
     actRotateArrow,
     actScatter,
+    winner,
+    gameMode,
+    aiColor,
+    setGameMode,
+    setAIColor,
   } = useGame();
 
   const [hover, setHover] = useState<Coord | null>(null);
@@ -159,7 +196,7 @@ export function BoardView() {
   const selectedIsKing = !!(selectedPiece && isKing(selectedPiece));
   const canOrientNow = selected ? valueAt(board, selected) >= 2 && selectedIsKing : false;
 
-  // Rays from all kings (include origin just for drawing continuity)
+  // Rays from all kings (include origin)
   const rayLines = useMemo(() => {
     const lines: { path: Coord[]; selected: boolean }[] = [];
     for (let r = 0; r < 8; r++) {
@@ -182,11 +219,42 @@ export function BoardView() {
     return fullValueAt(board, hover);
   }, [board, hover]);
 
+  // --- AI turn loop (simple heuristic) ------------------------------------
+  useEffect(() => {
+    if (winner) return;
+    if (gameMode !== "vsAI") return;
+    if (turn !== aiColor) return;
+    if (rotateMode || scatterMode) return;
+
+    // tiny delay for UX
+    const t = setTimeout(() => {
+      const moves = enumerateMoves(board, aiColor);
+      if (!moves.length) return; // stalemate-ish; do nothing
+
+      // pick the highest score; stable tie-break by array order
+      let best = moves[0];
+      for (let i = 1; i < moves.length; i++) {
+        if (moves[i].score > best.score) best = moves[i];
+      }
+
+      if (best.kind === "combine") {
+        actCombine(best.from, best.to);
+      } else {
+        actMove(best.from, best.to, !!best.capture);
+      }
+    }, 180);
+
+    return () => clearTimeout(t);
+  }, [board, turn, winner, gameMode, aiColor, rotateMode, scatterMode, actMove, actCombine]);
+
   // Click a square (and pieces call this too)
   function onSquareClick(r: number, c: number) {
+    if (winner) return;
+    if (gameMode === "vsAI" && turn === aiColor) return; // block human during AI turn
+
     const pos = { r, c };
 
-    // Scatter selection: pick a base (landing pair = base+1 & base+2)
+    // Scatter base selection
     if (scatterMode) {
       if (!selected) return;
       const p = pieceAt(board, selected);
@@ -198,7 +266,7 @@ export function BoardView() {
       return;
     }
 
-    if (rotateMode) return; // rotation preview mode: confirm/cancel only
+    if (rotateMode) return; // in rotate preview, only toolbar confirms/cancels
 
     if (!selected) {
       const p = pieceAt(board, pos);
@@ -214,7 +282,6 @@ export function BoardView() {
     const owner = ownerOf(mover);
 
     if (canMove || canCap || canComb) {
-      // Animate then commit
       setAnim({ kind: "move", from: selected, to: pos, owner });
       setAnimGo(false);
       requestAnimationFrame(() => requestAnimationFrame(() => setAnimGo(true)));
@@ -250,7 +317,7 @@ export function BoardView() {
     if (!selected || !selectedIsKing) return;
     const cur = (selectedPiece as any)?.arrowDir as AllDir | null;
     setRotateMode(true);
-    setPreviewDir((prev) => prev ? nextCW(prev) : cur ? nextCW(cur) : "N");
+    setPreviewDir((prev) => (prev ? nextCW(prev) : cur ? nextCW(cur) : "N"));
   }
 
   function confirmRotation() {
@@ -259,8 +326,7 @@ export function BoardView() {
       setPreviewDir(null);
       return;
     }
-    // Absolute set to previewDir; server/store decides turn consumption
-    actRotateArrow(selected, previewDir as any);
+    actRotateArrow(selected, previewDir as any); // store decides if turn is consumed
     setRotateMode(false);
     setPreviewDir(null);
   }
@@ -281,13 +347,13 @@ export function BoardView() {
       scatterBase && bases.some((b) => coordEq(b, scatterBase)) ? scatterBase : bases[0];
     const val = validateScatter(board, selected, base) ?? { l1: base, l2: base, can: false };
     return { bases, base, ...val };
-    // { l1, l2, can, reason }
   }, [board, selected, scatterMode, scatterBase]);
 
   // Hotkeys
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!selected) return;
+      if (!selected || winner) return;
+      if (gameMode === "vsAI" && turn === aiColor) return;
       if (e.key === "s" || e.key === "S") {
         setScatterMode(true);
         setScatterBase(selected);
@@ -328,7 +394,18 @@ export function BoardView() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selected, scatterMode, scatterInfo, rotateMode, previewDir, board]);
+  }, [
+    selected,
+    scatterMode,
+    scatterInfo,
+    rotateMode,
+    previewDir,
+    board,
+    winner,
+    gameMode,
+    turn,
+    aiColor,
+  ]);
 
   // Cleanup timer
   useEffect(() => {
@@ -344,11 +421,12 @@ export function BoardView() {
     };
   }
 
-  // Side help lines (add Key messages)
+  // Help lines
   const helpLines = useMemo(() => {
     const out: string[] = [];
-    if (!selectedPiece) return out;
-    const v = valueAt(board, selected!);
+    const sel = selected;
+    if (!selectedPiece || !sel) return out;
+    const v = valueAt(board, sel);
     out.push(
       v === 0
         ? "Value 0: cannot move, cannot orient."
@@ -360,8 +438,7 @@ export function BoardView() {
     );
     if (selectedIsKing)
       out.push("King: its ray boosts allies / diminishes enemies in line-of-sight.");
-    else
-      out.push("Single: can combine with adjacent friendly single to form a king.");
+    else out.push("Single: can combine with adjacent friendly single to form a king.");
     if (isKeyPiece(selectedPiece)) {
       out.push("This is a key piece. Take your opponents key pieces to win the game.");
       out.push("Key pieces cannot combine to form kings.");
@@ -372,7 +449,7 @@ export function BoardView() {
     return out;
   }, [board, selected, selectedPiece, selectedIsKing]);
 
-  // All destinations to paint (moves + combines + captures)
+  // All destinations to paint
   const allDestinations = useMemo(() => {
     if (!selected || scatterMode || rotateMode) return [] as Coord[];
     const list = [...legal.moves, ...legal.combines, ...legal.captures];
@@ -396,25 +473,112 @@ export function BoardView() {
     >
       {/* Left info panel */}
       <div
-        className="side-help"
-        style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: 260,
-          padding: "10px 12px",
-          background: "#1d1d1d",
-          border: "1px solid #2c2c2c",
-          borderRadius: 8,
-          color: "#ddd",
-          height: SQUARE * 8,
-          overflowY: "auto",
-          opacity: showHelp ? 1 : 0,
-          pointerEvents: showHelp ? "auto" : "none",
-          transition: "opacity 120ms ease",
-          marginRight: 40,
-        }}
-      >
+  className="side-help"
+  style={{
+    position: "absolute",
+    left: 0,
+    top: 0,
+    width: 260,
+    padding: "10px 12px",
+    background: "#1d1d1d",
+    border: "1px solid #2c2c2c",
+    borderRadius: 8,
+    color: "#ddd",
+    height: SQUARE * 8,
+    overflowY: "auto",
+    overflowX: "hidden",   // ← add this line
+    opacity: showHelp ? 1 : 0,
+    pointerEvents: showHelp ? "auto" : "none",
+    transition: "opacity 120ms ease",
+    marginRight: 40,
+  }}
+>
+
+        {/* Winner banner */}
+        {winner && (
+          <div
+            style={{
+              marginBottom: 8,
+              padding: "8px 10px",
+              border: "1px solid #2c2c2c",
+              borderRadius: 8,
+              background: "#231f1f",
+              color: "#f4dada",
+            }}
+          >
+            <strong>Game over:</strong> {winner} wins (both enemy keys captured).
+          </div>
+        )}
+
+        {/* Mode & AI controls (stacked; no horizontal growth) */}
+<div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+  {/* Row 1: Mode toggle */}
+  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+    <button
+      style={{
+        padding: "6px 10px",
+        width: "100%",
+        borderRadius: 6,
+        border: "1px solid #333",
+        background: gameMode === "hotseat" ? "#3a3a3a" : "#262626",
+        color: "#ddd",
+      }}
+      onClick={() => setGameMode("hotseat")}
+    >
+      Hotseat
+    </button>
+    <button
+      style={{
+        padding: "6px 10px",
+        width: "100%",
+        borderRadius: 6,
+        border: "1px solid #333",
+        background: gameMode === "vsAI" ? "#3a3a3a" : "#262626",
+        color: "#ddd",
+      }}
+      onClick={() => setGameMode("vsAI")}
+    >
+      vs AI
+    </button>
+  </div>
+
+  {/* Row 2: AI side (only when vs AI) */}
+  {gameMode === "vsAI" && (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <span style={{ fontSize: 11, opacity: 0.75 }}>AI plays</span>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+        <button
+          style={{
+            padding: "6px 10px",
+            width: "100%",
+            borderRadius: 6,
+            border: "1px solid #333",
+            background: aiColor === "Black" ? "#3a3a3a" : "#262626",
+            color: "#ddd",
+          }}
+          onClick={() => setAIColor("Black")}
+        >
+          Black
+        </button>
+        <button
+          style={{
+            padding: "6px 10px",
+            width: "100%",
+            borderRadius: 6,
+            border: "1px solid #333",
+            background: aiColor === "White" ? "#3a3a3a" : "#262626",
+            color: "#ddd",
+          }}
+          onClick={() => setAIColor("White")}
+        >
+          White
+        </button>
+      </div>
+    </div>
+  )}
+</div>
+
+
         {selectedPiece ? (
           <>
             <div
@@ -437,7 +601,7 @@ export function BoardView() {
               <strong>{selected ? fullValueAt(board, selected) : "-"}</strong>
             </div>
 
-            {/* === Action Toolbar (directly under header/value) ======================= */}
+            {/* Action Toolbar */}
             {selectedIsKing && (
               <div
                 style={{
@@ -448,7 +612,7 @@ export function BoardView() {
                   flexWrap: "wrap",
                 }}
               >
-                {/* ── ROTATE group ─────────────────────────────────────────────────────── */}
+                {/* Rotate group */}
                 {canOrientNow && (
                   <div style={GROUP_STYLE}>
                     <div style={ROW_STYLE}>
@@ -471,7 +635,9 @@ export function BoardView() {
                     <div style={SLOT_STYLE}>
                       {rotateMode ? (
                         <>
-                          <button style={BTN} onClick={cycleCW}>Cycle</button>
+                          <button style={BTN} onClick={cycleCW}>
+                            Cycle
+                          </button>
                           <button
                             style={BTN}
                             onClick={() => {
@@ -487,16 +653,22 @@ export function BoardView() {
                         </>
                       ) : (
                         <>
-                          <button style={{ ...BTN, visibility: "hidden" }}>Cycle</button>
-                          <button style={{ ...BTN, visibility: "hidden" }}>Cancel</button>
-                          <button style={{ ...BTN_PRIMARY, visibility: "hidden" }}>Confirm</button>
+                          <button style={{ ...BTN, visibility: "hidden" }}>
+                            Cycle
+                          </button>
+                          <button style={{ ...BTN, visibility: "hidden" }}>
+                            Cancel
+                          </button>
+                          <button style={{ ...BTN_PRIMARY, visibility: "hidden" }}>
+                            Confirm
+                          </button>
                         </>
                       )}
                     </div>
                   </div>
                 )}
 
-                {/* ── SCATTER group ───────────────────────────────────────────────────── */}
+                {/* Scatter group */}
                 <div style={GROUP_STYLE}>
                   <div style={ROW_STYLE}>
                     <button
@@ -563,7 +735,9 @@ export function BoardView() {
                     ) : (
                       <>
                         <button style={{ ...BTN, visibility: "hidden" }}>Cancel</button>
-                        <button style={{ ...BTN_PRIMARY, visibility: "hidden" }}>Confirm</button>
+                        <button style={{ ...BTN_PRIMARY, visibility: "hidden" }}>
+                          Confirm
+                        </button>
                       </>
                     )}
                   </div>
@@ -571,7 +745,7 @@ export function BoardView() {
               </div>
             )}
 
-            {/* Help text follows */}
+            {/* Help text */}
             <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.35 }}>
               {helpLines.map((t, i) => (
                 <div key={i} style={{ marginBottom: 6 }}>
@@ -634,14 +808,14 @@ export function BoardView() {
             })
           )}
 
-          {/* Rays (continuous, origin included for drawing only) */}
+          {/* Rays */}
           <g>
             {rayLines.map((l, i) => (
               <RayOverlay key={`ray-${i}`} rays={l.path} selected={l.selected} />
             ))}
           </g>
 
-          {/* Scatter bases (V3+) */}
+          {/* Scatter bases */}
           {scatterMode && scatterInfo && scatterInfo.bases.length > 1 &&
             scatterInfo.bases.map((b, i) => (
               <rect
@@ -681,7 +855,7 @@ export function BoardView() {
             </>
           )}
 
-          {/* Pieces (clickable) */}
+          {/* Pieces */}
           {board.map((row, r) =>
             row.map((p, c) =>
               p ? (
@@ -689,7 +863,9 @@ export function BoardView() {
                   key={`p-${r}-${c}`}
                   pos={{ r, c }}
                   piece={p}
-                  highlight={selected && selected.r === r && selected.c === c ? "selected" : undefined}
+                  highlight={
+                    selected && selected.r === r && selected.c === c ? "selected" : undefined
+                  }
                   onClick={() => onSquareClick(r, c)}
                   onMouseEnter={() => setHover({ r, c })}
                   onMouseLeave={() => setHover(null)}
@@ -711,34 +887,21 @@ export function BoardView() {
             </text>
           )}
 
-          {/* Orientation dots (click → buffer preview; fixed mapping via DIRS) */}
-          {selected && canOrientNow && !scatterMode && (() => {
+          {/* Rotation preview — white arrow */}
+          {rotateMode && selected && selectedIsKing && previewDir && (() => {
             const cx = selected.c * SQUARE + SQUARE / 2;
             const cy = selected.r * SQUARE + SQUARE / 2;
-            const radius = SQUARE * 0.42;
+            const angle = dirToAngle(previewDir);
             return (
-              <g className="orient-dots">
-                {(["N","NE","E","SE","S","SW","W","NW"] as const).map((d) => {
-                  const [dr, dc] = DIRS[d];
-                  const x = cx + dc * radius;
-                  const y = cy + dr * radius;
-                  return (
-                    <circle
-                      key={d}
-                      cx={x}
-                      cy={y}
-                      r={6}
-                      fill="white"
-                      stroke="black"
-                      strokeWidth={1}
-                      style={{ cursor: "pointer" }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleOrient(d);
-                      }}
-                    />
-                  );
-                })}
+              <g transform={`translate(${cx} ${cy}) rotate(${angle})`}>
+                <path
+                  d="M -10,12 L 0,-14 L 10,12"
+                  fill="none"
+                  stroke="#fff"
+                  strokeWidth={3}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
               </g>
             );
           })()}
@@ -824,25 +987,6 @@ export function BoardView() {
                   />
                 </g>
               </>
-            );
-          })()}
-
-          {/* Rotation PREVIEW overlay — WHITE arrow */}
-          {rotateMode && selected && selectedIsKing && previewDir && (() => {
-            const cx = selected.c * SQUARE + SQUARE / 2;
-            const cy = selected.r * SQUARE + SQUARE / 2;
-            const angle = dirToAngle(previewDir);
-            return (
-              <g transform={`translate(${cx} ${cy}) rotate(${angle})`}>
-                <path
-                  d="M -10,12 L 0,-14 L 10,12"
-                  fill="none"
-                  stroke="#fff"
-                  strokeWidth={3}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </g>
             );
           })()}
         </svg>
