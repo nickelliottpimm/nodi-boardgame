@@ -1,3 +1,4 @@
+// src/store/gameStore.ts
 import { create } from "zustand";
 import type { Board, Player } from "../game/rules";
 import { pieceAt, isKing, ownerOf, valueAt, isKeyPiece } from "../game/rules";
@@ -16,6 +17,11 @@ type Snapshot = {
 };
 
 type GameMode = "hotseat" | "vsAI";
+
+// Direction helpers (used by rotate)
+type AllDir = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
+const DIR_ORDER: AllDir[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+type RotateArg = "CW" | "CCW" | AllDir;
 
 function cloneBoard(b: Board): Board {
   return b.map((row) =>
@@ -55,9 +61,6 @@ function winnerAfter(board: Board, mover: Player): Player | null {
   const opp = other(mover);
   return keysRemaining(board, opp) === 0 ? mover : null;
 }
-
-type AllDir = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
-type RotateArg = "CW" | "CCW" | AllDir;
 
 type GameState = {
   board: Board;
@@ -269,9 +272,8 @@ export const useGame = create<GameState>((set, get) => ({
     const p = pieceAt(board, at);
     if (!p || !isKing(p) || !p.arrowDir) return;
 
-    const DIR_ORDER: AllDir[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-    const idx = DIR_ORDER.indexOf(p.arrowDir);
-
+    // compute next direction
+    const idx = DIR_ORDER.indexOf(p.arrowDir as AllDir);
     let nextDir: AllDir;
     if (dir === "CW") nextDir = DIR_ORDER[(idx + 1) % 8];
     else if (dir === "CCW") nextDir = DIR_ORDER[(idx + 7) % 8];
@@ -282,13 +284,14 @@ export const useGame = create<GameState>((set, get) => ({
     if (!np) return;
     np.arrowDir = nextDir;
 
+    // Free rotate if resulting value ≥ 3
     const free = valueAt(next, at) >= 3;
-    const snap: Snapshot = { board: cloneBoard(board), turn };
 
+    const snap: Snapshot = { board: cloneBoard(board), turn };
     set({
       board: next,
       turn: free ? turn : other(turn),
-      selected: { ...at },
+      selected: { ...at }, // keep it selected after rotate
       highlights: [],
       history: [...history, snap],
       canUndo: true,
