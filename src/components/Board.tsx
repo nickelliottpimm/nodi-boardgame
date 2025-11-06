@@ -295,6 +295,12 @@ export function BoardView() {
     setRotateMode(true);
     setPreviewDir((prev) => (prev ? nextCW(prev) : cur ? nextCW(cur) : "N"));
   }
+  // Click a dot to enter rotate mode with that absolute direction
+function handleOrient(dir: AllDir) {
+  if (!selected || !selectedIsKing) return;
+  setRotateMode(true);
+  setPreviewDir(dir);
+}
   function confirmRotation() {
     if (!selected || !selectedIsKing || !previewDir) {
       setRotateMode(false);
@@ -867,7 +873,49 @@ export function BoardView() {
               </g>
             );
           })()}
+{/* Orientation dots (click → set absolute previewDir; fixed mapping via DIRS) */}
+{selected && selectedIsKing && canOrientNow && !scatterMode && (() => {
+  const cx = selected.c * SQUARE + SQUARE / 2;
+  const cy = selected.r * SQUARE + SQUARE / 2;
+  const radius = SQUARE * 0.42;
+  const dirs = ["N","NE","E","SE","S","SW","W","NW"] as const;
 
+  return (
+    <g className="orient-dots">
+      {dirs.map((d) => {
+        const [dr, dc] = DIRS[d];
+        const x = cx + dc * radius;
+        const y = cy + dr * radius;
+
+        // show which dot is currently previewed (slightly larger ring)
+        const isPreview = previewDir === d;
+        return (
+          <g key={d} onClick={(e) => { e.stopPropagation(); handleOrient(d); }} style={{ cursor: "pointer" }}>
+            <circle
+              cx={x}
+              cy={y}
+              r={isPreview ? 7 : 6}
+              fill="#fff"
+              stroke="#000"
+              strokeWidth={1}
+            />
+            {isPreview && (
+              <circle
+                cx={x}
+                cy={y}
+                r={10}
+                fill="none"
+                stroke="#fff"
+                strokeWidth={1}
+                opacity={0.7}
+              />
+            )}
+          </g>
+        );
+      })}
+    </g>
+  );
+})()}
           {/* GREEN highlights */}
           {selected && !scatterMode && !rotateMode && (() => {
             const seen = new Set<string>();
