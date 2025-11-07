@@ -17,7 +17,7 @@ import { scatterBases, validateScatter } from "../game/scatter";
 import { PieceView } from "./Piece";
 import { RayOverlay } from "./RayOverlay";
 import { useGame } from "../store/gameStore";
-import { enumerateMoves, type AIMove } from "../engine/greedy";
+import { enumerateMoves, pickWithLookahead, type AIMove } from "../engine/greedy";
 
 type AllDir = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
 const DIR_ORDER: AllDir[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
@@ -188,24 +188,18 @@ export function BoardView() {
     if (turn !== aiColor) return;
     if (rotateMode || scatterMode) return;
 
-    const t = setTimeout(() => {
-      const moves: AIMove[] = enumerateMoves(board, aiColor);
-      if (!moves.length) return;
+   const t = setTimeout(() => {
+  const action =
+    pickWithLookahead(board, aiColor, { replyLimit: 6, moveLimit: 24 }) ??
+    (enumerateMoves(board, aiColor)[0] ?? null);
 
-      let best = moves[0];
-      for (let i = 1; i < moves.length; i++) {
-        if (moves[i].score > best.score) best = moves[i];
-      }
+  if (!action) return;
 
-      if (best.kind === "combine") {
-        actCombine(best.from, best.to);
-      } else if (best.kind === "rotate") {
-        // New: allow AI to free-rotate its king when value ≥ 3
-        actRotateArrow(best.at, best.dir);
-      } else {
-        actMove(best.from, best.to, !!best.capture);
-      }
-    }, 180);
+  if (action.kind === "combine") actCombine(action.from, action.to);
+  else if (action.kind === "rotate") actRotateArrow(action.at, action.dir);
+  else actMove(action.from, action.to, !!action.capture);
+}, 180);
+
 
     return () => clearTimeout(t);
   }, [

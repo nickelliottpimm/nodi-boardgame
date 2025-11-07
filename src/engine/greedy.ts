@@ -69,7 +69,7 @@ function applyMoveClone(
     | { kind: "combine"; from: { r: number; c: number }; onto: { r: number; c: number } }
     | { kind: "rotate"; at: { r: number; c: number }; dir: "CW" | "CCW" }
 ): Board {
-  void side; // silence TS6133 (param intentionally unused)
+  void side; // param intentionally unused here
   const next = cloneBoard(board);
 
   if (m.kind === "move") {
@@ -207,4 +207,73 @@ export function enumerateMoves(board: Board, side: Player): AIMove[] {
   // Keep the list sorted (best first).
   out.sort((a, b) => b.score - a.score);
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Depth-2 lookahead (minimax with pruning)
+const OPP_REPLY_LIMIT_DEFAULT = 6;
+const MOVE_LIMIT_DEFAULT = 24;
+
+/**
+ * Pick a move using shallow minimax (our move, then opponent reply).
+ * Keeps it fast by pruning to the top N candidates from enumerateMoves.
+ */
+export function pickWithLookahead(
+  board: Board,
+  side: Player,
+  opts?: { replyLimit?: number; moveLimit?: number }
+): AIMove | null {
+  const replyLimit = opts?.replyLimit ?? OPP_REPLY_LIMIT_DEFAULT;
+  const moveLimit = opts?.moveLimit ?? MOVE_LIMIT_DEFAULT;
+
+  const firstMoves = enumerateMoves(board, side).slice(0, moveLimit);
+  if (!firstMoves.length) return null;
+
+  let bestMove: AIMove | null = null;
+  let bestScore = -Infinity;
+
+  for (const m of firstMoves) {
+    const nb = applyMoveClone(board, side, (m.kind === "combine"
+      ? { kind: "combine", from: m.from as any, onto: (m as any).to }
+      : m.kind === "move"
+      ? { kind: "move", from: m.from as any, to: (m as any).to, capture: (m as any).capture }
+      : { kind: "rotate", at: (m as any).at, dir: (m as any).dir }
+    ) as any);
+
+    // Fast terminal check: if opponent has no keys after our move, snap-pick
+    let oppKeys = 0;
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const p = pieceAt(nb, { r, c });
+      if (p && isKeyPiece(p) && ownerOf(p) === other(side)) oppKeys++;
+    }
+    if (oppKeys === 0) {
+      return { ...m, score: 9999 };
+    }
+
+    const baseAfterUs = evaluateBoard(nb, side);
+
+    // Opponent replies (pruned)
+    const replies = enumerateMoves(nb, other(side)).slice(0, replyLimit);
+
+    // Opponent tries to minimize our evaluation (i.e., maximize theirs)
+    let worstForUs = replies.length ? Infinity : 0;
+    for (const r of replies) {
+      const nb2 = applyMoveClone(nb, other(side), (r.kind === "combine"
+        ? { kind: "combine", from: r.from as any, onto: (r as any).to }
+        : r.kind === "move"
+        ? { kind: "move", from: r.from as any, to: (r as any).to, capture: (r as any).capture }
+        : { kind: "rotate", at: (r as any).at, dir: (r as any).dir }
+      ) as any);
+      const val = evaluateBoard(nb2, side);
+      if (val < worstForUs) worstForUs = val;
+    }
+
+    const minimaxScore = baseAfterUs - worstForUs;
+    if (minimaxScore > bestScore) {
+      bestScore = minimaxScore;
+      bestMove = { ...(m as any), score: minimaxScore };
+    }
+  }
+
+  return bestMove;
 }
