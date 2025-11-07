@@ -235,7 +235,7 @@ export function BoardView() {
       if (best.kind === "combine") {
         actCombine(best.from, best.to);
       } else if (best.kind === "rotate") {
-        // ✅ New: allow AI to free-rotate its king when value ≥ 3
+        // ✅ New: allow AI to free-rotate its king when value greater than 3
         actRotateArrow(best.at, best.dir);
       } else {
         actMove(best.from, best.to, !!best.capture);
