@@ -56,7 +56,7 @@ function dirFromDelta(a: { r: number; c: number }, b: { r: number; c: number }) 
   return map[`${dr},${dc}`];
 }
 
-// Apply a hypothetical move to a cloned board
+// // Apply a hypothetical move to a cloned board
 function applyMoveClone(
   board: Board,
   side: Player,
@@ -64,6 +64,7 @@ function applyMoveClone(
     | { kind: "move"; from: { r: number; c: number }; to: { r: number; c: number }; capture?: boolean }
     | { kind: "combine"; from: { r: number; c: number }; onto: { r: number; c: number } }
 ): Board {
+  void side; // 👈 silences TS6133 (parameter intentionally unused)
   const next = cloneBoard(board);
 
   if (m.kind === "move") {
