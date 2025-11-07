@@ -17,7 +17,7 @@ import { scatterBases, validateScatter } from "../game/scatter";
 import { PieceView } from "./Piece";
 import { RayOverlay } from "./RayOverlay";
 import { useGame } from "../store/gameStore";
-import { enumerateMoves, pickWithLookahead, type AIMove } from "../engine/greedy";
+import { enumerateMoves, pickWithLookahead } from "../engine/greedy";
 
 type AllDir = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
 const DIR_ORDER: AllDir[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
