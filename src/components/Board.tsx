@@ -214,7 +214,7 @@ export function BoardView() {
     return fullValueAt(board, hover);
   }, [board, hover]);
 
-  // AI loop
+    // AI loop
   useEffect(() => {
     if (winner) return;
     if (gameMode !== "vsAI") return;
@@ -224,16 +224,37 @@ export function BoardView() {
     const t = setTimeout(() => {
       const moves = enumerateMoves(board, aiColor);
       if (!moves.length) return;
+
+      // Pick highest scoring move
       let best = moves[0];
       for (let i = 1; i < moves.length; i++) {
         if (moves[i].score > best.score) best = moves[i];
       }
-      if (best.kind === "combine") actCombine(best.from, best.to);
-      else actMove(best.from, best.to, !!best.capture);
+
+      // Handle move types
+      if (best.kind === "combine") {
+        actCombine(best.from, best.to);
+      } else if (best.kind === "rotate") {
+        // ✅ New: allow AI to free-rotate its king when value ≥ 3
+        actRotateArrow(best.at, best.dir);
+      } else {
+        actMove(best.from, best.to, !!best.capture);
+      }
     }, 180);
 
     return () => clearTimeout(t);
-  }, [board, turn, winner, gameMode, aiColor, rotateMode, scatterMode, actMove, actCombine]);
+  }, [
+    board,
+    turn,
+    winner,
+    gameMode,
+    aiColor,
+    rotateMode,
+    scatterMode,
+    actMove,
+    actCombine,
+    actRotateArrow,
+  ]);
 
   // Click square
   function onSquareClick(r: number, c: number) {

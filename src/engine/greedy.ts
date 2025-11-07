@@ -10,13 +10,17 @@ import {
 } from "../game/rules";
 
 // ---------------------------------------------------------------------------
-// Types (unchanged)
+// Types (+ rotate added)
 export type AIMove =
   | { kind: "combine"; from: { r: number; c: number }; to: { r: number; c: number }; score: number }
-  | { kind: "move"; from: { r: number; c: number }; to: { r: number; c: number }; score: number; capture?: boolean };
+  | { kind: "move"; from: { r: number; c: number }; to: { r: number; c: number }; score: number; capture?: boolean }
+  | { kind: "rotate"; at: { r: number; c: number }; dir: "CW" | "CCW"; score: number };
 
 // ---------------------------------------------------------------------------
 // Small helpers (local to this file)
+type AllDir = "N"|"NE"|"E"|"SE"|"S"|"SW"|"W"|"NW";
+const DIR_ORDER: AllDir[] = ["N","NE","E","SE","S","SW","W","NW"];
+
 const other = (p: Player): Player => (p === "Black" ? "White" : "Black");
 
 function cloneBoard(b: Board): Board {
@@ -46,25 +50,26 @@ function roughAdjEmpties(board: Board, pos: { r: number; c: number }): number {
   return n;
 }
 
-function dirFromDelta(a: { r: number; c: number }, b: { r: number; c: number }) {
+function dirFromDelta(a: { r: number; c: number }, b: { r: number; c: number }): AllDir {
   const dr = Math.sign(b.r - a.r);
   const dc = Math.sign(b.c - a.c);
-  const map: Record<string, "N"|"NE"|"E"|"SE"|"S"|"SW"|"W"|"NW"> = {
+  const map: Record<string, AllDir> = {
     "-1,0": "N", "-1,1": "NE", "0,1": "E", "1,1": "SE",
     "1,0": "S", "1,-1": "SW", "0,-1": "W", "-1,-1": "NW",
   };
   return map[`${dr},${dc}`];
 }
 
-// // Apply a hypothetical move to a cloned board
+// Apply a hypothetical move to a cloned board
 function applyMoveClone(
   board: Board,
   side: Player,
   m:
     | { kind: "move"; from: { r: number; c: number }; to: { r: number; c: number }; capture?: boolean }
     | { kind: "combine"; from: { r: number; c: number }; onto: { r: number; c: number } }
+    | { kind: "rotate"; at: { r: number; c: number }; dir: "CW" | "CCW" }
 ): Board {
-  void side; // 👈 silences TS6133 (parameter intentionally unused)
+  void side; // silence TS6133 (param intentionally unused)
   const next = cloneBoard(board);
 
   if (m.kind === "move") {
@@ -76,15 +81,29 @@ function applyMoveClone(
     return next;
   }
 
-  // combine
-  const a = pieceAt(next, m.from);
-  const b = pieceAt(next, m.onto);
-  if (!a || !b) return next;
-  next[m.onto.r][m.onto.c] = {
-    counters: [...b.counters, ...a.counters],
-    arrowDir: dirFromDelta(m.from, m.onto),
-  };
-  next[m.from.r][m.from.c] = null;
+  if (m.kind === "combine") {
+    const a = pieceAt(next, m.from);
+    const b = pieceAt(next, m.onto);
+    if (!a || !b) return next;
+    next[m.onto.r][m.onto.c] = {
+      counters: [...b.counters, ...a.counters],
+      arrowDir: dirFromDelta(m.from, m.onto),
+    };
+    next[m.from.r][m.from.c] = null;
+    return next;
+  }
+
+  // rotate (free orientation candidate at value >= 3)
+  if (m.kind === "rotate") {
+    const p = pieceAt(next, m.at);
+    if (!p) return next;
+    if (!isKing(p) || !(p as any).arrowDir) return next;
+    const idx = DIR_ORDER.indexOf((p as any).arrowDir as AllDir);
+    const nextDir = m.dir === "CW" ? DIR_ORDER[(idx + 1) % 8] : DIR_ORDER[(idx + 7) % 8];
+    (p as any).arrowDir = nextDir;
+    return next;
+  }
+
   return next;
 }
 
@@ -172,10 +191,20 @@ export function enumerateMoves(board: Board, side: Player): AIMove[] {
         const score = base + center;
         out.push({ kind: "move", from: pos, to, score });
       }
+
+      // NEW: free-rotation candidates for kings at value >= 3 (pre-aim rays)
+      if (isKing(p) && (p as any).arrowDir && valueAt(board, pos) >= 3) {
+        // try CW and CCW; absolute dirs are possible but this is cheap and effective
+        for (const dir of ["CW", "CCW"] as const) {
+          const next = applyMoveClone(board, side, { kind: "rotate", at: pos, dir });
+          const score = evaluateBoard(next, side);
+          out.push({ kind: "rotate", at: pos, dir, score });
+        }
+      }
     }
   }
 
-  // Keep the list sorted (best first). Your worker/AI loop can pick out[0].
+  // Keep the list sorted (best first).
   out.sort((a, b) => b.score - a.score);
   return out;
 }
