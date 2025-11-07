@@ -17,6 +17,7 @@ import { scatterBases, validateScatter } from "../game/scatter";
 import { PieceView } from "./Piece";
 import { RayOverlay } from "./RayOverlay";
 import { useGame } from "../store/gameStore";
+import { enumerateMoves, type AIMove } from "../engine/greedy";
 
 type AllDir = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
 const DIR_ORDER: AllDir[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
@@ -109,40 +110,6 @@ function fullValueAt(board: Board, pos: Coord): number {
   return total;
 }
 
-/** --- very simple built-in AI ------------------------------------------- **/
-type AIMove =
-  | { kind: "combine"; from: Coord; to: Coord; score: number }
-  | { kind: "move"; from: Coord; to: Coord; score: number; capture?: boolean };
-
-function enumerateMoves(board: Board, side: Player): AIMove[] {
-  const out: AIMove[] = [];
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
-      const pos = { r, c };
-      const p = pieceAt(board, pos);
-      if (!p || ownerOf(p) !== side) continue;
-      const lm = legalMovesFor(board, pos);
-      for (const to of lm.combines) {
-        out.push({ kind: "combine", from: pos, to, score: 20 });
-      }
-      for (const to of lm.captures) {
-        const tgt = pieceAt(board, to);
-        const keyBonus = tgt && isKeyPiece(tgt) ? 300 : 0;
-        const valBonus = 10 * (tgt ? valueAt(board, to) : 0);
-        const centerBonus = 2 * (3 - Math.abs(3.5 - to.r)) + 2 * (3 - Math.abs(3.5 - to.c));
-        out.push({ kind: "move", from: pos, to, capture: true, score: 150 + keyBonus + valBonus + centerBonus });
-      }
-      for (const to of lm.moves) {
-        const vTo = valueAt(board, to);
-        const centerBonus = 2 * (3 - Math.abs(3.5 - to.r)) + 2 * (3 - Math.abs(3.5 - to.c));
-        const rayBonus = isKing(p) ? 5 : 0;
-        out.push({ kind: "move", from: pos, to, score: 5 + 3 * vTo + centerBonus + rayBonus });
-      }
-    }
-  }
-  return out;
-}
-
 export function BoardView() {
   const {
     board,
@@ -186,9 +153,9 @@ export function BoardView() {
 
   const selectedPiece = selected ? pieceAt(board, selected) : null;
   const selectedIsKing = !!(selectedPiece && isKing(selectedPiece));
-  const friendlySelected = !!(selectedPiece && ownerOf(selectedPiece) === turn); // ★ must belong to current turn
+  const friendlySelected = !!(selectedPiece && ownerOf(selectedPiece) === turn); // must belong to current turn
   const canOrientNow = selected
-    ? selectedIsKing && friendlySelected && valueAt(board, selected) >= 2 // ★ ownership + value≥2
+    ? selectedIsKing && friendlySelected && valueAt(board, selected) >= 2
     : false;
 
   // Rays
@@ -214,7 +181,7 @@ export function BoardView() {
     return fullValueAt(board, hover);
   }, [board, hover]);
 
-    // AI loop
+  // AI loop
   useEffect(() => {
     if (winner) return;
     if (gameMode !== "vsAI") return;
@@ -222,20 +189,18 @@ export function BoardView() {
     if (rotateMode || scatterMode) return;
 
     const t = setTimeout(() => {
-      const moves = enumerateMoves(board, aiColor);
+      const moves: AIMove[] = enumerateMoves(board, aiColor);
       if (!moves.length) return;
 
-      // Pick highest scoring move
       let best = moves[0];
       for (let i = 1; i < moves.length; i++) {
         if (moves[i].score > best.score) best = moves[i];
       }
 
-      // Handle move types
       if (best.kind === "combine") {
         actCombine(best.from, best.to);
       } else if (best.kind === "rotate") {
-        // ✅ New: allow AI to free-rotate its king when value greater than 3
+        // New: allow AI to free-rotate its king when value ≥ 3
         actRotateArrow(best.at, best.dir);
       } else {
         actMove(best.from, best.to, !!best.capture);
@@ -290,7 +255,7 @@ export function BoardView() {
     const mover = pieceAt(board, selected)!;
     const moverOwner = ownerOf(mover);
 
-    // ★ Do not allow acting with a piece that no longer belongs to the current turn
+    // Do not allow acting with a piece that no longer belongs to the current turn
     if (moverOwner !== turn) {
       select(null as any);
       return;
@@ -322,7 +287,7 @@ export function BoardView() {
   // Rotate helpers
   function cycleCW() {
     if (!selected || !selectedIsKing) return;
-    if (!friendlySelected) return; // ★ only your own piece
+    if (!friendlySelected) return;
     const cur = (selectedPiece as any)?.arrowDir as AllDir | null;
     setRotateMode(true);
     setPreviewDir((prev) => (prev ? nextCW(prev) : cur ? nextCW(cur) : "N"));
@@ -330,7 +295,7 @@ export function BoardView() {
   // Click a dot to enter rotate mode with that absolute direction
   function handleOrient(dir: AllDir) {
     if (!selected || !selectedIsKing) return;
-    if (!friendlySelected) return; // ★ only your own piece
+    if (!friendlySelected) return;
     setRotateMode(true);
     setPreviewDir(dir);
   }
@@ -340,12 +305,12 @@ export function BoardView() {
       setPreviewDir(null);
       return;
     }
-    const prevTurn = turn; // ★ track before
+    const prevTurn = turn; // track before
     actRotateArrow(selected, previewDir as any);
-    const nextTurn = useGame.getState().turn; // ★ read after store update
+    const nextTurn = useGame.getState().turn; // read after store update
     // if the rotate consumed the turn (value-2), clear selection to block further actions
     if (nextTurn !== prevTurn) {
-      select(null as any); // ★ clear selection on turn flip
+      select(null as any); // clear selection on turn flip
     }
     setRotateMode(false);
     setPreviewDir(null);
@@ -376,7 +341,7 @@ export function BoardView() {
       const selPiece = selected ? pieceAt(board, selected) : null;
       const selOwner = selPiece ? ownerOf(selPiece) : null;
 
-      // ★ Only allow hotkeys when the selected piece belongs to the current turn
+      // Only allow hotkeys when the selected piece belongs to the current turn
       if (!selPiece || selOwner !== turn) return;
 
       if (e.key === "s" || e.key === "S") {
@@ -640,7 +605,7 @@ export function BoardView() {
                       <button
                         style={rotateMode ? BTN_ACTIVE : BTN}
                         onClick={() => {
-                          if (!friendlySelected) return; // ★ guard
+                          if (!friendlySelected) return;
                           const cur = (selectedPiece as any)?.arrowDir as AllDir | null;
                           if (!rotateMode) {
                             setRotateMode(true);
@@ -688,7 +653,7 @@ export function BoardView() {
                     <button
                       style={scatterMode ? BTN_ACTIVE : BTN}
                       onClick={() => {
-                        if (!friendlySelected) return; // ★ guard
+                        if (!friendlySelected) return;
                         if (!scatterMode) {
                           if (!selected) return;
                           setScatterMode(true);
