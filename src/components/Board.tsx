@@ -186,7 +186,10 @@ export function BoardView() {
 
   const selectedPiece = selected ? pieceAt(board, selected) : null;
   const selectedIsKing = !!(selectedPiece && isKing(selectedPiece));
-  const canOrientNow = selected ? valueAt(board, selected) >= 2 && selectedIsKing : false;
+  const friendlySelected = !!(selectedPiece && ownerOf(selectedPiece) === turn); // ★ must belong to current turn
+  const canOrientNow = selected
+    ? selectedIsKing && friendlySelected && valueAt(board, selected) >= 2 // ★ ownership + value≥2
+    : false;
 
   // Rays
   const rayLines = useMemo(() => {
@@ -264,9 +267,16 @@ export function BoardView() {
     const canComb = legal.combines.some((m) => coordEq(m, pos));
 
     const mover = pieceAt(board, selected)!;
-    const owner = ownerOf(mover);
+    const moverOwner = ownerOf(mover);
+
+    // ★ Do not allow acting with a piece that no longer belongs to the current turn
+    if (moverOwner !== turn) {
+      select(null as any);
+      return;
+    }
 
     if (canMove || canCap || canComb) {
+      const owner = moverOwner;
       setAnim({ kind: "move", from: selected, to: pos, owner });
       setAnimGo(false);
       requestAnimationFrame(() => requestAnimationFrame(() => setAnimGo(true)));
@@ -291,23 +301,31 @@ export function BoardView() {
   // Rotate helpers
   function cycleCW() {
     if (!selected || !selectedIsKing) return;
+    if (!friendlySelected) return; // ★ only your own piece
     const cur = (selectedPiece as any)?.arrowDir as AllDir | null;
     setRotateMode(true);
     setPreviewDir((prev) => (prev ? nextCW(prev) : cur ? nextCW(cur) : "N"));
   }
   // Click a dot to enter rotate mode with that absolute direction
-function handleOrient(dir: AllDir) {
-  if (!selected || !selectedIsKing) return;
-  setRotateMode(true);
-  setPreviewDir(dir);
-}
+  function handleOrient(dir: AllDir) {
+    if (!selected || !selectedIsKing) return;
+    if (!friendlySelected) return; // ★ only your own piece
+    setRotateMode(true);
+    setPreviewDir(dir);
+  }
   function confirmRotation() {
     if (!selected || !selectedIsKing || !previewDir) {
       setRotateMode(false);
       setPreviewDir(null);
       return;
     }
+    const prevTurn = turn; // ★ track before
     actRotateArrow(selected, previewDir as any);
+    const nextTurn = useGame.getState().turn; // ★ read after store update
+    // if the rotate consumed the turn (value-2), clear selection to block further actions
+    if (nextTurn !== prevTurn) {
+      select(null as any); // ★ clear selection on turn flip
+    }
     setRotateMode(false);
     setPreviewDir(null);
   }
@@ -334,6 +352,12 @@ function handleOrient(dir: AllDir) {
     function onKey(e: KeyboardEvent) {
       if (!selected || winner) return;
       if (gameMode === "vsAI" && turn === aiColor) return;
+      const selPiece = selected ? pieceAt(board, selected) : null;
+      const selOwner = selPiece ? ownerOf(selPiece) : null;
+
+      // ★ Only allow hotkeys when the selected piece belongs to the current turn
+      if (!selPiece || selOwner !== turn) return;
+
       if (e.key === "s" || e.key === "S") {
         setScatterMode(true);
         setScatterBase(selected);
@@ -489,7 +513,7 @@ function handleOrient(dir: AllDir) {
           </div>
         )}
 
-        {/* Mode & AI controls (stacked; no horizontal growth) */}
+        {/* Mode & AI controls */}
         <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
             <button
@@ -595,6 +619,7 @@ function handleOrient(dir: AllDir) {
                       <button
                         style={rotateMode ? BTN_ACTIVE : BTN}
                         onClick={() => {
+                          if (!friendlySelected) return; // ★ guard
                           const cur = (selectedPiece as any)?.arrowDir as AllDir | null;
                           if (!rotateMode) {
                             setRotateMode(true);
@@ -642,6 +667,7 @@ function handleOrient(dir: AllDir) {
                     <button
                       style={scatterMode ? BTN_ACTIVE : BTN}
                       onClick={() => {
+                        if (!friendlySelected) return; // ★ guard
                         if (!scatterMode) {
                           if (!selected) return;
                           setScatterMode(true);
@@ -873,49 +899,50 @@ function handleOrient(dir: AllDir) {
               </g>
             );
           })()}
-{/* Orientation dots (click → set absolute previewDir; fixed mapping via DIRS) */}
-{selected && selectedIsKing && canOrientNow && !scatterMode && (() => {
-  const cx = selected.c * SQUARE + SQUARE / 2;
-  const cy = selected.r * SQUARE + SQUARE / 2;
-  const radius = SQUARE * 0.42;
-  const dirs = ["N","NE","E","SE","S","SW","W","NW"] as const;
 
-  return (
-    <g className="orient-dots">
-      {dirs.map((d) => {
-        const [dr, dc] = DIRS[d];
-        const x = cx + dc * radius;
-        const y = cy + dr * radius;
+          {/* Orientation dots — only when it's your turn and your piece */}
+          {selected && selectedIsKing && canOrientNow && friendlySelected && !scatterMode && (() => {
+            const cx = selected.c * SQUARE + SQUARE / 2;
+            const cy = selected.r * SQUARE + SQUARE / 2;
+            const radius = SQUARE * 0.42;
+            const dirs = ["N","NE","E","SE","S","SW","W","NW"] as const;
 
-        // show which dot is currently previewed (slightly larger ring)
-        const isPreview = previewDir === d;
-        return (
-          <g key={d} onClick={(e) => { e.stopPropagation(); handleOrient(d); }} style={{ cursor: "pointer" }}>
-            <circle
-              cx={x}
-              cy={y}
-              r={isPreview ? 7 : 6}
-              fill="#fff"
-              stroke="#000"
-              strokeWidth={1}
-            />
-            {isPreview && (
-              <circle
-                cx={x}
-                cy={y}
-                r={10}
-                fill="none"
-                stroke="#fff"
-                strokeWidth={1}
-                opacity={0.7}
-              />
-            )}
-          </g>
-        );
-      })}
-    </g>
-  );
-})()}
+            return (
+              <g className="orient-dots">
+                {dirs.map((d) => {
+                  const [dr, dc] = DIRS[d];
+                  const x = cx + dc * radius;
+                  const y = cy + dr * radius;
+
+                  const isPreview = previewDir === d;
+                  return (
+                    <g key={d} onClick={(e) => { e.stopPropagation(); handleOrient(d); }} style={{ cursor: "pointer" }}>
+                      <circle
+                        cx={x}
+                        cy={y}
+                        r={isPreview ? 7 : 6}
+                        fill="#fff"
+                        stroke="#000"
+                        strokeWidth={1}
+                      />
+                      {isPreview && (
+                        <circle
+                          cx={x}
+                          cy={y}
+                          r={10}
+                          fill="none"
+                          stroke="#fff"
+                          strokeWidth={1}
+                          opacity={0.7}
+                        />
+                      )}
+                    </g>
+                  );
+                })}
+              </g>
+            );
+          })()}
+
           {/* GREEN highlights */}
           {selected && !scatterMode && !rotateMode && (() => {
             const seen = new Set<string>();

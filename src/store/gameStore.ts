@@ -85,6 +85,10 @@ type GameState = {
   actCombine: (from: Coord, onto: Coord) => void;
   actScatter: (from: Coord, l1: Coord, l2: Coord) => void;
   actRotateArrow: (at: Coord, dir: RotateArg) => void;
+
+  /** Helpers so all UI paths share the same rotate rule */
+  rotateSelected: () => void;
+  orientSelected: (dir: AllDir) => void;
 };
 
 export const useGame = create<GameState>((set, get) => ({
@@ -268,33 +272,50 @@ export const useGame = create<GameState>((set, get) => ({
   },
 
   actRotateArrow: (at, dir) => {
-    const { board, turn, history } = get();
-    const p = pieceAt(board, at);
-    if (!p || !isKing(p) || !p.arrowDir) return;
+  const { board, turn, history } = get();
+  const p = pieceAt(board, at);
+  if (!p || !isKing(p) || !p.arrowDir) return;
 
-    // compute next direction
-    const idx = DIR_ORDER.indexOf(p.arrowDir as AllDir);
-    let nextDir: AllDir;
-    if (dir === "CW") nextDir = DIR_ORDER[(idx + 1) % 8];
-    else if (dir === "CCW") nextDir = DIR_ORDER[(idx + 7) % 8];
-    else nextDir = dir;
+  // ✅ Free rotate if and only if the *current effective value* is ≥ 3 (buffs count).
+  //    Evaluate BEFORE rotation so a value-2 king can't rotate to become 3+ and be free.
+  const freeBefore = valueAt(board, at) >= 3;
 
-    const next = cloneBoard(board);
-    const np = next[at.r][at.c];
-    if (!np) return;
-    np.arrowDir = nextDir;
+  // Compute next direction using the top-level DIR_ORDER
+  const idx = DIR_ORDER.indexOf(p.arrowDir as AllDir);
+  let nextDir: AllDir;
+  if (dir === "CW") nextDir = DIR_ORDER[(idx + 1) % 8];
+  else if (dir === "CCW") nextDir = DIR_ORDER[(idx + 7) % 8];
+  else nextDir = dir;
 
-    // Free rotate if resulting value ≥ 3
-    const free = valueAt(next, at) >= 3;
+  // Apply on clone
+  const next = cloneBoard(board);
+  const np = next[at.r][at.c];
+  if (!np) return;
+  np.arrowDir = nextDir;
 
-    const snap: Snapshot = { board: cloneBoard(board), turn };
-    set({
-      board: next,
-      turn: free ? turn : other(turn),
-      selected: { ...at }, // keep it selected after rotate
-      highlights: [],
-      history: [...history, snap],
-      canUndo: true,
-    });
+  const snap: Snapshot = { board: cloneBoard(board), turn };
+
+  set({
+    board: next,
+    // Consume the turn only if it was < 3 before rotation
+    turn: freeBefore ? turn : other(turn),
+    selected: { ...at },   // keep selection; Board.tsx clears it only if turn flips
+    highlights: [],
+    history: [...history, snap],
+    canUndo: true,
+  });
+},
+
+  // --- UI helpers so every rotate path uses the same rule above ---
+  rotateSelected: () => {
+    const { selected, actRotateArrow } = get();
+    if (!selected) return;
+    actRotateArrow(selected, "CW");
+  },
+
+  orientSelected: (dir) => {
+    const { selected, actRotateArrow } = get();
+    if (!selected) return;
+    actRotateArrow(selected, dir);
   },
 }));
