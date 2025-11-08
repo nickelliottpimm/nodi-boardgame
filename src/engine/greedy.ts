@@ -55,6 +55,47 @@ function cloneBoard(b: Board): Board {
   );
 }
 
+// --- Quick tactical probes --------------------------------------------------
+function keySquares(
+  board: Board,
+  side: Player
+): Array<{ r: number; c: number }> {
+  const ks: Array<{ r: number; c: number }> = [];
+  for (let r = 0; r < 8; r++)
+    for (let c = 0; c < 8; c++) {
+      const p = pieceAt(board, { r, c });
+      if (p && isKeyPiece(p) && ownerOf(p) === side) ks.push({ r, c });
+    }
+  return ks;
+}
+
+function canSideCaptureSquare(
+  board: Board,
+  side: Player,
+  target: { r: number; c: number }
+): boolean {
+  // Generate captures for 'side'; if any hits target, it's capturable.
+  for (let r = 0; r < 8; r++)
+    for (let c = 0; c < 8; c++) {
+      const from = { r, c };
+      const p = pieceAt(board, from);
+      if (!p || ownerOf(p) !== side) continue;
+      const lm = legalMovesFor(board, from);
+      for (const to of lm.captures) {
+        if (to.r === target.r && to.c === target.c) return true;
+      }
+    }
+  return false;
+}
+
+function canOppCaptureOurKey(board: Board, me: Player): boolean {
+  const opp = other(me);
+  for (const k of keySquares(board, me)) {
+    if (canSideCaptureSquare(board, opp, k)) return true;
+  }
+  return false;
+}
+
 function keysRemaining(board: Board, side: Player): number {
   let n = 0;
   for (let r = 0; r < 8; r++)
@@ -169,7 +210,7 @@ function applyMoveClone(
 }
 
 // ---------------------------------------------------------------------------
-// Position evaluator (weights conservative; easy to tune)
+// Position evaluator (threat-aware)
 function evaluateBoard(board: Board, me: Player): number {
   let score = 0;
 
@@ -180,7 +221,8 @@ function evaluateBoard(board: Board, me: Player): number {
       const p = pieceAt(board, pos);
       if (!p) continue;
 
-      const sign = ownerOf(p) === me ? 1 : -1;
+      const mine = ownerOf(p) === me;
+      const sign = mine ? 1 : -1;
 
       // Material (kings heavier)
       score += sign * (isKing(p) ? 3 : 1);
@@ -254,6 +296,18 @@ function evaluateBoard(board: Board, me: Player): number {
     }
   score += nodeScore;
 
+  // --- Threat awareness: enemy can capture our key? big penalty
+  if (canOppCaptureOurKey(board, me)) score -= 6;
+
+  // Softer threat: enemy can capture any of our kings?
+  // (Scan kings only to keep it cheap.)
+  for (let r = 0; r < 8; r++)
+    for (let c = 0; c < 8; c++) {
+      const p = pieceAt(board, { r, c });
+      if (!p || !isKing(p) || ownerOf(p) !== me) continue;
+      if (canSideCaptureSquare(board, other(me), { r, c })) score -= 1.2;
+    }
+
   // Terminal: opponent out of keys
   if (keysRemaining(board, other(me)) === 0) score += 1000;
 
@@ -261,7 +315,7 @@ function evaluateBoard(board: Board, me: Player): number {
 }
 
 // ---------------------------------------------------------------------------
-// Main: enumerate and score candidates by resulting position quality
+// Main: enumerate and score candidates (with hanging-piece penalty)
 export function enumerateMoves(board: Board, side: Player): AIMove[] {
   const out: AIMove[] = [];
 
@@ -280,8 +334,11 @@ export function enumerateMoves(board: Board, side: Player): AIMove[] {
           from: pos,
           onto: to,
         });
-        const base = evaluateBoard(next, side);
-        const score = base + 0.6; // slight preference to form a king
+        let score = evaluateBoard(next, side) + 0.6; // prefer forming a king
+
+        // hanging penalty if the new stack is immediately capturable
+        if (canSideCaptureSquare(next, other(side), to)) score -= 1.25;
+
         out.push({ kind: "combine", from: pos, to, score });
       }
 
@@ -294,20 +351,29 @@ export function enumerateMoves(board: Board, side: Player): AIMove[] {
           to,
           capture: true,
         });
-        const base = evaluateBoard(next, side);
+        let score = evaluateBoard(next, side);
         const capBonus = 1.5 + (tgt && isKeyPiece(tgt) ? 3 : 0);
-        const score = base + capBonus;
+        score += capBonus;
+
+        // hanging penalty if our capturing piece is immediately recaptured
+        if (canSideCaptureSquare(next, other(side), to)) score -= 0.9;
+
         out.push({ kind: "move", from: pos, to, capture: true, score });
       }
 
       // quiet moves
       for (const to of lm.moves) {
         const next = applyMoveClone(board, side, { kind: "move", from: pos, to });
-        const base = evaluateBoard(next, side);
+        let score = evaluateBoard(next, side);
+
         // tiny centralization nudge to break ties (very small)
         const center =
           0.03 * ((3 - Math.abs(3.5 - to.r)) + (3 - Math.abs(3.5 - to.c)));
-        const score = base + center;
+        score += center;
+
+        // hanging penalty if the landing square is capturable
+        if (canSideCaptureSquare(next, other(side), to)) score -= 0.75;
+
         out.push({ kind: "move", from: pos, to, score });
       }
 
@@ -355,13 +421,21 @@ export function enumerateMoves(board: Board, side: Player): AIMove[] {
 }
 
 // ---------------------------------------------------------------------------
-// Depth-2 lookahead (minimax with pruning)
+// Depth-2 lookahead (minimax with capture-preserving pruning)
 const OPP_REPLY_LIMIT_DEFAULT = 6;
 const MOVE_LIMIT_DEFAULT = 24;
 
+/** Ensure all capture replies are included, then top-K others */
+function shortlistReplies(board: Board, side: Player, kOther: number): AIMove[] {
+  const all = enumerateMoves(board, side);
+  const caps = all.filter((m) => m.kind === "move" && (m as any).capture);
+  const nonCaps = all.filter((m) => !(m.kind === "move" && (m as any).capture));
+  return caps.concat(nonCaps.slice(0, kOther));
+}
+
 /**
  * Pick a move using shallow minimax (our move, then opponent reply).
- * Keeps it fast by pruning to the top N candidates from enumerateMoves.
+ * Pruning keeps all opponent captures + top-N others so we never miss "…and they just take it".
  */
 export function pickWithLookahead(
   board: Board,
@@ -414,8 +488,8 @@ export function pickWithLookahead(
 
     const baseAfterUs = evaluateBoard(nb, side);
 
-    // Opponent replies (pruned)
-    const replies = enumerateMoves(nb, other(side)).slice(0, replyLimit);
+    // Opponent replies (all captures + top-(replyLimit) others)
+    const replies = shortlistReplies(nb, other(side), replyLimit);
 
     // Opponent tries to minimize our evaluation
     let worstForUs = replies.length ? Infinity : 0;
