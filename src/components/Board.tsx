@@ -182,38 +182,49 @@ export function BoardView() {
   }, [board, hover]);
 
   // AI loop
-  useEffect(() => {
-    if (winner) return;
-    if (gameMode !== "vsAI") return;
-    if (turn !== aiColor) return;
-    if (rotateMode || scatterMode) return;
+useEffect(() => {
+  if (winner) return;
+  if (gameMode !== "vsAI") return;
+  if (turn !== aiColor) return;
+  if (rotateMode || scatterMode) return;
 
-   const t = setTimeout(() => {
-  const action =
-    pickWithLookahead(board, aiColor, { replyLimit: 6, moveLimit: 24 }) ??
-    (enumerateMoves(board, aiColor)[0] ?? null);
+  const t = setTimeout(() => {
+    const action =
+      pickWithLookahead(board, aiColor, { replyLimit: 6, moveLimit: 24 }) ??
+      (enumerateMoves(board, aiColor)[0] ?? null);
 
-  if (!action) return;
+    if (!action) return;
 
-  if (action.kind === "combine") actCombine(action.from, action.to);
-  else if (action.kind === "rotate") actRotateArrow(action.at, action.dir);
-  else actMove(action.from, action.to, !!action.capture);
-}, 180);
+    switch (action.kind) {
+      case "combine":
+        actCombine(action.from, action.to);
+        break;
+      case "rotate":
+        actRotateArrow(action.at, action.dir);
+        break;
+      case "scatter":
+        actScatter(action.from, action.l1, action.l2);
+        break;
+      case "move":
+        actMove(action.from, action.to, !!action.capture);
+        break;
+    }
+  }, 180);
 
-
-    return () => clearTimeout(t);
-  }, [
-    board,
-    turn,
-    winner,
-    gameMode,
-    aiColor,
-    rotateMode,
-    scatterMode,
-    actMove,
-    actCombine,
-    actRotateArrow,
-  ]);
+  return () => clearTimeout(t);
+}, [
+  board,
+  turn,
+  winner,
+  gameMode,
+  aiColor,
+  rotateMode,
+  scatterMode,
+  actMove,
+  actCombine,
+  actRotateArrow,
+  actScatter,
+]);
 
   // Click square
   function onSquareClick(r: number, c: number) {
