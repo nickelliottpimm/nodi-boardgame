@@ -91,16 +91,6 @@ function canWeCaptureEnemyKey(board: Board, me: Player): boolean {
   return false;
 }
 
-function roughAdjEmpties(board: Board, pos: { r: number; c: number }): number {
-  let n = 0;
-  for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
-    if (!dr && !dc) continue;
-    const r = pos.r + dr, c = pos.c + dc;
-    if (r >= 0 && r < 8 && c >= 0 && c < 8 && !pieceAt(board, { r, c })) n++;
-  }
-  return n;
-}
-
 function dirFromDelta(a: { r: number; c: number }, b: { r: number; c: number }): AllDir {
   const dr = Math.sign(b.r - a.r);
   const dc = Math.sign(b.c - a.c);
@@ -365,9 +355,8 @@ export function enumerateMoves(board: Board, side: Player): AIMove[] {
         const tookKing  = !!(tgtBefore && isKing(tgtBefore));
         const tookVal   = tgtBefore ? valueAt(board, to) : 0;
 
-        // Stronger bias to grab kings/keys
         let capBonus =
-          3.2 +                                // generic capture bonus (up from 2.6)
+          3.2 +                                // generic capture bonus
           (tookKey ? 5.2 : 0) +                // keys = prime targets
           (tookKing ? 4.8 : 0) +               // BIG boost for king captures
           0.18 * tookVal +                     // value of target
@@ -381,21 +370,18 @@ export function enumerateMoves(board: Board, side: Player): AIMove[] {
           const damp    = 1 / (1 + 0.6 * def);
           recPenalty = 1.4 * lossImp * damp;                    // slightly softer baseline
 
-          // If we just took a king/key, be much braver
           if (tookKing) recPenalty *= 0.35;
           else if (tookKey) recPenalty *= 0.5;
 
-          // If we can recapture back on that square, be braver again
           if (recaptureRelief(nb, side, to)) recPenalty *= 0.6;
 
-          // If we traded up on "importance", reduce penalty a touch
           const moverWasKing = isKing(p);
           const moverImp = moverWasKing ? 2.2 : isKeyPiece(p) ? 3.2 : 1.0;
           const targetImp = tookKey ? 3.2 : tookKing ? 2.2 : 1.0;
           if (targetImp > moverImp) recPenalty *= 0.8;
         }
 
-        // Tactical override: king/key captures get a big shove so they win ties
+        // Tactical override so king/key takes win ties
         if (tookKing) capBonus += 6.0;
         else if (tookKey) capBonus += 3.5;
 
@@ -475,7 +461,6 @@ export function pickWithLookahead(
       : { kind: "scatter", from: (m as any).from, l1: (m as any).l1, l2: (m as any).l2 }
     ) as any);
 
-    // If we just captured their last key, snap-pick
     if (keysRemaining(nb, other(side)) === 0) {
       return { ...m, score: 9999 };
     }
@@ -483,7 +468,6 @@ export function pickWithLookahead(
     const baseAfterUs = evaluateBoard(nb, side);
     const replies = enumerateMoves(nb, other(side)).slice(0, replyLimit);
 
-    // Opponent tries to minimize our standing
     let worstForUs = replies.length ? Infinity : 0;
     for (const r of replies) {
       const nb2 = applyMoveClone(nb, other(side), (r.kind === "combine"
@@ -498,7 +482,7 @@ export function pickWithLookahead(
       if (val < worstForUs) worstForUs = val;
     }
 
-    // Tactical preference: if `m` captured a king, shove the minimax score up
+    // Tactical preference: if `m` captured a king/key, shove the minimax score up
     let tactical = 0;
     if (m.kind === "move" && m.capture) {
       const tgtWas = pieceAt(board, (m as any).to);
