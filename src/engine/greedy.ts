@@ -219,14 +219,7 @@ function recaptureRelief(
   landing: { r: number; c: number }
 ): boolean {
   const opp = other(us);
-  // Opponent recaptures landing?
   if (!canSideCaptureSquare(boardAfterOurCapture, opp, landing)) return false;
-
-  // Board after a hypothetical opponent recapture at `landing` — rough probe:
-  // Instead of simulating each opp recapture, just check if WE have any capture back to landing
-  // in the *current* boardAfterOurCapture state by temporarily flipping side.
-  // (Approximation: treat landing as likely contested; if we have any capture to landing now,
-  // we’ll often also have one in the immediate line.)
   return canSideCaptureSquare(boardAfterOurCapture, us, landing);
 }
 
@@ -281,10 +274,10 @@ function evaluateBoard(board: Board, me: Player): number {
     // Keys
     if (isKeyPiece(p)) score += sign * 5;
 
-    // Effective value (incl. buffs)
+    // Effective value
     score += sign * (valueAt(board, pos) * 0.25);
 
-    // Ray presence small nudge
+    // Ray presence nudge
     if (isKing(p) && (p as any).arrowDir) score += sign * 0.15;
 
     // Threat pressure
@@ -361,7 +354,7 @@ export function enumerateMoves(board: Board, side: Player): AIMove[] {
         out.push({ kind: "combine", from: pos, to, score });
       }
 
-      // captures
+      // captures (HEAVILY reward king captures + soften fear)
       for (const to of lm.captures) {
         const tgtBefore = pieceAt(board, to);
         const nb = applyMoveClone(board, side, { kind: "move", from: pos, to, capture: true });
@@ -374,22 +367,23 @@ export function enumerateMoves(board: Board, side: Player): AIMove[] {
 
         // Stronger bias to grab kings/keys
         let capBonus =
-          2.6 +                                // generic capture bonus
-          (tookKey ? 4.2 : 0) +                // keys = prime targets
-          (tookKing ? 3.2 : 0) +               // ← boost: prefer king captures
-          0.14 * tookVal +                     // value of target
+          3.2 +                                // generic capture bonus (up from 2.6)
+          (tookKey ? 5.2 : 0) +                // keys = prime targets
+          (tookKing ? 4.8 : 0) +               // BIG boost for king captures
+          0.18 * tookVal +                     // value of target
           0.06 * ((3 - Math.abs(3.5 - to.r)) + (3 - Math.abs(3.5 - to.c)));
 
         // Recapture risk at landing
         let recPenalty = 0;
         if (canSideCaptureSquare(nb, other(side), to)) {
-          const lossImp = importanceAt(nb, to);                 // we likely lose our mover
+          const lossImp = importanceAt(nb, to);                 // lose our mover if recaptured
           const def     = adjacentFriends(nb, side, to);
           const damp    = 1 / (1 + 0.6 * def);
-          recPenalty = 1.6 * lossImp * damp;                    // slightly softer than before
+          recPenalty = 1.4 * lossImp * damp;                    // slightly softer baseline
 
-          // If we just took a king/key, be braver
-          if (tookKing || tookKey) recPenalty *= 0.5;
+          // If we just took a king/key, be much braver
+          if (tookKing) recPenalty *= 0.35;
+          else if (tookKey) recPenalty *= 0.5;
 
           // If we can recapture back on that square, be braver again
           if (recaptureRelief(nb, side, to)) recPenalty *= 0.6;
@@ -400,6 +394,10 @@ export function enumerateMoves(board: Board, side: Player): AIMove[] {
           const targetImp = tookKey ? 3.2 : tookKing ? 2.2 : 1.0;
           if (targetImp > moverImp) recPenalty *= 0.8;
         }
+
+        // Tactical override: king/key captures get a big shove so they win ties
+        if (tookKing) capBonus += 6.0;
+        else if (tookKey) capBonus += 3.5;
 
         const score = base + capBonus - recPenalty;
         out.push({ kind: "move", from: pos, to, capture: true, score });
@@ -477,6 +475,7 @@ export function pickWithLookahead(
       : { kind: "scatter", from: (m as any).from, l1: (m as any).l1, l2: (m as any).l2 }
     ) as any);
 
+    // If we just captured their last key, snap-pick
     if (keysRemaining(nb, other(side)) === 0) {
       return { ...m, score: 9999 };
     }
@@ -484,6 +483,7 @@ export function pickWithLookahead(
     const baseAfterUs = evaluateBoard(nb, side);
     const replies = enumerateMoves(nb, other(side)).slice(0, replyLimit);
 
+    // Opponent tries to minimize our standing
     let worstForUs = replies.length ? Infinity : 0;
     for (const r of replies) {
       const nb2 = applyMoveClone(nb, other(side), (r.kind === "combine"
@@ -498,7 +498,15 @@ export function pickWithLookahead(
       if (val < worstForUs) worstForUs = val;
     }
 
-    const minimaxScore = baseAfterUs - worstForUs;
+    // Tactical preference: if `m` captured a king, shove the minimax score up
+    let tactical = 0;
+    if (m.kind === "move" && m.capture) {
+      const tgtWas = pieceAt(board, (m as any).to);
+      if (tgtWas && isKing(tgtWas)) tactical += 5.0;
+      if (tgtWas && isKeyPiece(tgtWas)) tactical += 2.5;
+    }
+
+    const minimaxScore = baseAfterUs - worstForUs + tactical;
     if (minimaxScore > bestScore) {
       bestScore = minimaxScore;
       bestMove = { ...(m as any), score: minimaxScore };
